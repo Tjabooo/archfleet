@@ -43,6 +43,9 @@ Write-Output "Clipboard bridge: task '$taskName' for $user runs $script"
 $python = (Get-Command py -ErrorAction SilentlyContinue).Source
 $pyArgs = '-3 '
 if (-not $python) { $python = (Get-Command python -ErrorAction SilentlyContinue).Source; $pyArgs = '' }
+# Python install manager's own folder, which isn't always on PATH in SSH sessions
+$managed = Join-Path $env:LOCALAPPDATA 'Python\bin\python.exe'
+if ((-not $python -or $python -match 'WindowsApps') -and (Test-Path $managed)) { $python = $managed; $pyArgs = '' }
 if ($python -and $python -notmatch 'WindowsApps') {
     $cmd = Join-Path $dest 'archfleet-clipboard.cmd'
     Set-Content -LiteralPath $cmd -Encoding ASCII -Value @"
