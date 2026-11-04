@@ -205,6 +205,55 @@ CATEGORY_COLORS = {'Social': '#e2668a', 'Games': '#ee8a4a', 'Entertainment': '#9
 BLOCKS = ' ▁▂▃▄▅▆▇█'
 
 
+def since(epoch, now=None):
+    """Unix seconds -> '40 s ago', '12 min ago', '3 h ago', '2 d ago' (VPN drops need finer steps than ago())."""
+    if not epoch:
+        return '—'
+    seconds = max(0, (now or time.time()) - epoch)
+    if seconds < 90:
+        return f'{seconds:.0f} s ago'
+    if seconds < 5400:
+        return f'{seconds / 60:.0f} min ago'
+    if seconds < 172800:
+        return f'{seconds / 3600:.0f} h ago'
+    return f'{seconds / 86400:.0f} d ago'
+
+
+def vpn_short(vpn):
+    """One fleet-table cell: 'on · Stockholm', 'off', 'BLOCKED', '—' (no VPN)."""
+    if not vpn:
+        return '—'
+    state = vpn.get('state')
+    if state == 'connected':
+        text = 'on · ' + (vpn.get('city') or vpn.get('relay') or '?')
+    elif state == 'error':
+        text = 'BLOCKED'
+    elif state in ('connecting', 'disconnecting'):
+        text = state + '…'
+    else:
+        text = 'DOWN' if vpn.get('kind') == 'tunnel' else ('off · lockdown' if vpn.get('lockdown') else 'off')
+    return text + (' !' if vpn.get('problems') else '')
+
+
+def vpn_lines(hostname, vpn, now=None):
+    """The VPN tab's detail for one machine."""
+    if not vpn:
+        return f'{hostname}: no VPN client reported.'
+    kind = 'torrent split tunnel (only the torrent client uses it)' if vpn.get('kind') == 'tunnel' else 'Mullvad app'
+    lines = [f"{hostname}  ·  {kind}",
+             f"state {vpn.get('state')}" + (f"  ·  relay {vpn['relay']}" if vpn.get('relay') else '')
+             + (f"  ·  exit {vpn['exit_ip']}" if vpn.get('exit_ip') else '') + (f" ({vpn['city']})" if vpn.get('city') else '')]
+    extra = []
+    if vpn.get('lockdown') is not None:
+        extra.append('lockdown ' + ('on' if vpn['lockdown'] else 'off'))
+    extra.append('last drop ' + (since(vpn['last_drop'], now) if vpn.get('last_drop') else 'none recorded'))
+    if vpn.get('last_leak'):
+        extra.append('last leak alarm ' + since(vpn['last_leak'], now))
+    lines.append('  ·  '.join(extra))
+    lines += ['! ' + problem for problem in vpn.get('problems') or []]
+    return '\n'.join(lines)
+
+
 def st_duration(seconds):
     """3h 42m · 12m · <1m · 0m"""
     seconds = round(seconds or 0)
@@ -535,6 +584,19 @@ class Archfleet(App):
                                 yield Button('Go to workspace', id='workspace-go', classes='arch-action')
                             yield DataTable(id='windows', cursor_type='row', zebra_stripes=True)
                             yield Button('Focus selected window', id='window-focus', classes='arch-action')
+                    with TabPane('VPN', id='vpn'):
+                        with VerticalScroll():
+                            yield Static('VPN  ·  every machine, read with the status every 15 s', classes='eyebrow')
+                            yield DataTable(id='vpn-table', cursor_type='row', zebra_stripes=True)
+                            yield Static('Waiting for the first status…', id='vpn-detail', markup=False)
+                            with Horizontal(classes='actions'):
+                                yield Button('Connect', id='vpn-connect', classes='vpn-linux', variant='primary')
+                                yield Button('Disconnect…', id='vpn-disconnect', classes='vpn-linux')
+                                yield Button('Reconnect', id='vpn-reconnect', classes='vpn-linux')
+                                yield Button('Switch relay…', id='vpn-relay', classes='vpn-linux')
+                                yield Button('Restart tunnel…', id='vpn-restart', classes='vpn-windows')
+                                yield Button('Test tunnel', id='vpn-test', classes='vpn-windows')
+                            yield RichLog(id='vpn-log', wrap=True, markup=False)
                     with TabPane('Files', id='files'):
                         with VerticalScroll():
                             yield Static('TRANSFER A FILE', classes='eyebrow')
@@ -599,7 +661,9 @@ class Archfleet(App):
         yield Footer()
 
     def on_mount(self):
-        self.query_one('#fleet', DataTable).add_columns('Machine', 'Link', 'CPU', 'Memory', 'Uptime')
+        self.query_one('#fleet', DataTable).add_columns('Machine', 'Link', 'CPU', 'Memory', 'Uptime', 'VPN')
+        self.query_one('#vpn-table', DataTable).add_columns('Machine', 'VPN', 'State', 'Relay', 'Exit IP', 'Last drop')
+        self.query_one('#vpn-log', RichLog).border_title = 'VPN RESULTS'
         self.query_one('#workspaces', DataTable).add_columns('Workspace', 'Monitor', 'Windows')
         self.query_one('#windows', DataTable).add_columns('App', 'Window title', 'Workspace')
         table = self.query_one('#proc-table', DataTable)
@@ -672,7 +736,9 @@ class Archfleet(App):
             data = self.statuses.get(node['alias'], {})
             online = data.get('online')
             state = Text('online' if online else ('offline' if data else 'checking'), style='#79e2c2' if online else '#ed8796')
-            table.add_row(node['hostname'], state, f"{data.get('cpu') or 0:.0f}%" if online else '—', gib(data['memory_used']) if online else '—', uptime(data['uptime']) if online else '—', key=node['alias'])
+            vpn = data.get('vpn') if online else None
+            vpn_cell = Text(vpn_short(vpn), style='#ed8796' if vpn and not vpn.get('ok', True) else '#79e2c2' if vpn and vpn.get('state') == 'connected' else '#91a3bf')
+            table.add_row(node['hostname'], state, f"{data.get('cpu') or 0:.0f}%" if online else '—', gib(data['memory_used']) if online else '—', uptime(data['uptime']) if online else '—', vpn_cell, key=node['alias'])
             self.query_one('#select-' + node['alias'], Button).label = f"{'●' if online else '○'}  {node['label']}\n{node['hostname']}"
         data = self.statuses.get(self.selected['alias'], {})
         if data.get('online'):
@@ -719,6 +785,46 @@ class Archfleet(App):
         self.render_screentime()
         self.render_wake()
         self.render_speed()
+        self.render_vpn()
+
+    def render_vpn(self):
+        table = self.query_one('#vpn-table', DataTable)
+        table.clear()
+        for node in NODES:
+            data = self.statuses.get(node['alias'], {})
+            vpn = data.get('vpn') if data.get('online') else None
+            kind = '' if not vpn else ('torrent tunnel' if vpn.get('kind') == 'tunnel' else 'Mullvad')
+            state = Text(vpn_short(vpn) if data.get('online') else ('offline' if data else 'checking'),
+                         style='#ed8796' if vpn and not vpn.get('ok', True) else '#79e2c2' if vpn and vpn.get('state') == 'connected' else '#91a3bf')
+            table.add_row(node['hostname'], kind or '—', state, (vpn or {}).get('relay') or '—', (vpn or {}).get('exit_ip') or '—',
+                          since(vpn.get('last_drop')) if vpn else '—', key=node['alias'])
+        node = self.selected
+        data = self.statuses.get(node['alias'], {})
+        vpn = data.get('vpn') if data.get('online') else None
+        self.query_one('#vpn-detail', Static).update(vpn_lines(node['hostname'], vpn) if data.get('online') else f"{node['hostname']} is offline." if data else 'Checking…')
+        linux_ok = node['os'] == 'linux' and bool(vpn) and vpn.get('kind') == 'mullvad'
+        for widget in self.query('.vpn-linux'):
+            widget.disabled = not linux_ok
+        cfg = node.get('vpn') if isinstance(node.get('vpn'), dict) else {}
+        self.query_one('#vpn-restart', Button).disabled = node['os'] == 'linux' or not cfg.get('restart')
+        self.query_one('#vpn-test', Button).disabled = node['os'] == 'linux' or not cfg.get('test')
+
+    @work(group='vpn')
+    async def vpn_do(self, node, action, value=None):
+        log = self.query_one('#vpn-log', RichLog)
+        log.write(Text(f"{node['hostname']}: {action.removeprefix('vpn-')}{' ' + value if value else ''}…", style='#91a3bf'))
+        try:
+            result = await self.backend.call(node, action, value)
+            text = (result.get('text') or '').strip()
+            log.write(Text(text or 'done', style='#ed8796' if result.get('code') else ''))
+            self.log_event(f"{node['hostname']} / {action}: {'failed' if result.get('code') else 'done'}")
+            if result.get('code'):
+                self.notify(text[:250] or 'VPN action failed', severity='error')
+        except Exception as error:
+            log.write(Text(str(error), style='#ed8796'))
+            self.notify(str(error), severity='error')
+        await asyncio.sleep(2)   # let the tunnel settle before the table re-reads it
+        self.refresh_status()
 
     def screentime_tick(self):
         """Refresh the selected Arch machine's Screen Time when it's older than a minute."""
@@ -1488,6 +1594,18 @@ class Archfleet(App):
                      lambda text: self.execute(node, 'notify', {'text': text, 'from': self.local_node['hostname']}))
         elif ident == 'open-url':
             self.ask(node, 'url', f"Open a link in {node['hostname']}'s browser", 'https://…', 'Open', lambda url: self.execute(node, 'open-url', url))
+        elif ident in ('vpn-connect', 'vpn-reconnect', 'vpn-test'):
+            self.vpn_do(node, ident)
+        elif ident == 'vpn-disconnect':
+            lock = ((self.statuses.get(node['alias'], {}).get('vpn') or {}).get('lockdown'))
+            self.push_screen(Confirm(f"Disconnect {node['hostname']}'s VPN?\n\n" + ('Lockdown is on there: it loses internet until you reconnect (the LAN keeps working).' if lock else 'Its traffic goes out directly until you reconnect.'), 'Disconnect'),
+                             lambda yes: self.vpn_do(node, 'vpn-disconnect') if yes else None)
+        elif ident == 'vpn-relay':
+            self.ask(node, 'vpn-relay', f"Switch {node['hostname']}'s VPN relay", 'country [city] or hostname, e.g. se sto · de fra · se-sto-wg-001', 'Switch',
+                     lambda where: self.vpn_do(node, 'vpn-relay', where))
+        elif ident == 'vpn-restart':
+            self.push_screen(Confirm(f"Restart the VPN tunnel on {node['hostname']}?\n\nWhat uses it pauses for a few seconds; the kill switch keeps it from leaking meanwhile.", 'Restart tunnel'),
+                             lambda yes: self.vpn_do(node, 'vpn-restart') if yes else None)
         elif ident == 'run-go':
             self.start_run()
         elif ident == 'news':

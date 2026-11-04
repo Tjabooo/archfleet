@@ -16,6 +16,10 @@ other machines, no open ports and no background services.
   filterable, plus machine totals. You can end your own processes.
 - **Session** (Hyprland): peek at the screen, lock it, send a notification or open a link there;
   list monitors, workspaces and windows, switch workspace, focus a window, reload the config.
+- **VPN**: every machine's VPN in one table (state, relay, exit IP, last drop) plus a column in the
+  fleet table. Linux machines with the [Mullvad](https://mullvad.net) app: connect, disconnect,
+  reconnect, switch relay. Windows machines: show a VPN watchdog's status file and run the restart /
+  test commands you put in `hosts.json`.
 - **Files**: SCP upload/download, plus SSH, SFTP and tmux shells.
 - **Clipboard**: every machine's clipboard side by side. Copy between them with one key.
 - **Run**: one command on several machines at once, with output grouped per machine.
@@ -25,7 +29,7 @@ other machines, no open ports and no background services.
 
 It also comes with **clipdeck**, a SUPER+V clipboard picker overlay with one column per machine:
 this machine's cliphist history, the other machines' histories, and Windows' native clipboard
-history.
+history, paged so you can reach far back.
 
 ## Requirements
 
@@ -74,6 +78,22 @@ the same file on every machine:
 | `helper`, `clipboard_client` | Optional: non-default paths of the Linux helper / Windows clipboard client |
 | `screentime_command` | Optional: how to run `screentime today --json` there (default: from `~/.local/bin` or `PATH`) |
 | `marquee` | Optional: `true` on the machine running [Marquee](https://github.com/Tjabooo/marquee), to show its sharing load |
+| `vpn` | Optional, see below |
+
+The VPN tab finds the Mullvad app on Linux machines by itself. `vpn` adds what it can't guess:
+
+```json
+{"alias": "desktop", "vpn": {"state_file": "~/.local/state/my-rice/vpn.json"}}
+{"alias": "server",  "vpn": {"status_file": "C:\\ProgramData\\MyVpn\\status.json",
+                             "restart": "Restart-Service 'WireGuardTunnel$my-tunnel' -Force",
+                             "test": "& 'C:\\tools\\Test-MyVpn.ps1'"}}
+```
+
+| Key | Meaning |
+| --- | --- |
+| `state_file` | Linux: a JSON file with `last_drop` (unix seconds), written by whatever watches the VPN there |
+| `status_file` | Windows: a JSON status written by a VPN watchdog: `tunnel` (`up`/`down`), `server`, `exit` (`ok`, `ip`, `city`, `provider`), `problems`, `ok`, `at`, `lastDropAt`, `lastLeakAt` |
+| `restart`, `test` | Windows: PowerShell run over SSH by the Restart tunnel / Test tunnel buttons |
 
 Keys 1–9 select machines in the order listed.
 
@@ -121,7 +141,11 @@ Add the binds to your Hyprland config:
 [clipdeck/hyprland.lua](clipdeck/hyprland.lua) for a Lua config, or
 [clipdeck/hyprland.conf](clipdeck/hyprland.conf) for a classic `hyprland.conf`. SUPER+V opens the
 overlay. Each entry has a key chip (1–0, Q–P, A–L), and pressing the key or clicking the entry
-copies it to this machine. Esc or any other key closes it.
+copies it to this machine. Each column shows 10 entries a page and holds up to 100 (set
+`CLIPDECK_HISTORY` to change that; Windows itself keeps 25): ←/→, Page Up/Down, Home/End or the
+scroll wheel flip every column together, and the same keys then pick from the page shown. Esc or any
+other key closes it. If your eww config defines its own `clipdeck` window, copy the updated widget from
+[clipdeck/eww/eww.yuck](clipdeck/eww/eww.yuck) to get the pager.
 
 The overlay is an eww window. clipdeck uses the first eww config of yours that defines a
 `clipdeck` window (`~/.config/eww` or any `~/.config/*/eww`), so it can wear your theme. Otherwise it
@@ -154,7 +178,7 @@ On Windows the command is `%LOCALAPPDATA%\archfleet\archfleet-clipboard.cmd`. It
 - `backend.py` talks to each machine. On Linux it sends a JSON request to `helper.py` over
   `ssh <alias> python3 ~/.local/share/archfleet/helper.py --stdin` (or runs it directly on this
   machine). On Windows it sends PowerShell scripts over SSH.
-- Status is read every 15 seconds. Processes are read every 3 seconds, only while their tab is
+- Status is read every 15 seconds, the VPN state with it (`mullvad status --json` on Linux). Processes are read every 3 seconds, only while their tab is
   open. Session info is read only when you open that tab or press Refresh.
 - Clipboard data travels inside the SSH connection's input and output, so it never shows up in
   process lists, shell history or logs. Text and PNG images up to 8 MiB are supported. While

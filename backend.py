@@ -1,5 +1,6 @@
 import asyncio
 import base64
+import datetime
 import email.utils
 import json
 import os
@@ -107,10 +108,48 @@ $net = @(Get-CimInstance Win32_PerfFormattedData_Tcpip_NetworkInterface -ErrorAc
     uptime = ((Get-Date) - $os.LastBootUpTime).TotalSeconds
     battery = @()
     disks = $drives
+    vpn = $(if ($vpnFile -and (Test-Path -LiteralPath $vpnFile)) { try { [IO.File]::ReadAllText($vpnFile).TrimStart([char]0xFEFF) | ConvertFrom-Json } catch { $null } } else { $null })
     net_rx = [double]($net | Measure-Object -Property BytesReceivedPersec -Sum).Sum
     net_tx = [double]($net | Measure-Object -Property BytesSentPersec -Sum).Sum
-} | ConvertTo-Json -Compress -Depth 4
+} | ConvertTo-Json -Compress -Depth 6
 '''
+
+
+def ps_quote(text):
+    return "'" + str(text).replace("'", "''") + "'"
+
+
+def vpn_config(node):
+    return node.get('vpn') if isinstance(node.get('vpn'), dict) else {}
+
+
+def _stamp(value):
+    """ISO 8601 (PowerShell's 'o' format) -> unix seconds, or None."""
+    if not value:
+        return None
+    try:
+        return datetime.datetime.fromisoformat(str(value)).timestamp()
+    except (TypeError, ValueError):
+        return None
+
+
+def windows_vpn(raw):
+    """A Windows machine's VPN status file -> the same shape the Linux helper reports. Understands the
+    torrent split-tunnel watchdog's status.json (tunnel/server/exit/problems/lastLeakAt/lastDropAt)."""
+    if not isinstance(raw, dict):
+        return None
+    exit_info = raw.get('exit') if isinstance(raw.get('exit'), dict) else {}
+    problems = [str(p) for p in (raw.get('problems') or []) if p]
+    at = _stamp(raw.get('at'))
+    if at and time.time() - at > 300:
+        problems.insert(0, 'the watchdog has not updated its status for over 5 minutes')
+    if exit_info.get('ok') and exit_info.get('provider') is False:
+        problems.append(f"exit {exit_info.get('ip')} is not the VPN provider's")
+    return {'kind': 'tunnel', 'state': 'connected' if raw.get('tunnel') == 'up' else 'down',
+            'relay': raw.get('server'), 'city': exit_info.get('city') if exit_info.get('ok') else None,
+            'exit_ip': exit_info.get('ip') if exit_info.get('ok') else None, 'lockdown': None,
+            'last_drop': _stamp(raw.get('lastDropAt')), 'last_leak': _stamp(raw.get('lastLeakAt')),
+            'problems': problems, 'ok': bool(raw.get('ok')) and not problems}
 
 
 def magic_packet(mac):
@@ -166,13 +205,25 @@ class Backend:
                 if code or not output.startswith('{'):
                     raise RuntimeError('Could not read Windows processes.')
                 return json.loads(output)
+            if action in ('vpn-restart', 'vpn-test'):
+                script = vpn_config(node).get(action.removeprefix('vpn-'))
+                if not script:
+                    raise ValueError(f"No \"{action.removeprefix('vpn-')}\" command for this machine's VPN in hosts.json.")
+                # every stream (Write-Host included) as plain text, not CLIXML
+                script = "$ProgressPreference = 'SilentlyContinue'\n& {\n" + script + "\n} *>&1 | Out-String -Width 160"
+                encoded = base64.b64encode(script.encode('utf-16-le')).decode()
+                code, output, error = await run([*SSH_BASE, '-T', '-o', 'BatchMode=yes', node['alias'], 'powershell -NoProfile -NonInteractive -EncodedCommand ' + encoded], timeout=180)
+                return {'code': code, 'text': (output + ('\n' + error if error else '')).strip()}
             if action != 'status':
                 raise ValueError('Select an Arch machine for these controls.')
-            encoded = base64.b64encode(WINDOWS_STATUS.encode('utf-16-le')).decode()
+            script = f"$vpnFile = {ps_quote(vpn_config(node).get('status_file', ''))}\n" + WINDOWS_STATUS
+            encoded = base64.b64encode(script.encode('utf-16-le')).decode()
             code, output, error = await run([*SSH_BASE, '-T', '-o', 'BatchMode=yes', node['alias'], 'powershell -NoProfile -NonInteractive -EncodedCommand ' + encoded], timeout=15)
             if code:
                 raise RuntimeError(error or output or 'Could not read Windows status.')
-            return json.loads(output)
+            data = json.loads(output)
+            data['vpn'] = windows_vpn(data.get('vpn'))
+            return data
         if self.is_local(node):
             argv = [sys.executable, str(ROOT / 'helper.py'), '--stdin']
         else:
@@ -200,7 +251,8 @@ class Backend:
     async def status(self, node):
         started = time.monotonic()
         try:
-            data = await self.call(node)
+            value = {'vpn_state': vpn_config(node).get('state_file')} if node['os'] == 'linux' else None
+            data = await self.call(node, 'status', value)
             return dict(data, online=True, elapsed_ms=round((time.monotonic() - started) * 1000))
         except Exception as error:
             return {'online': False, 'error': str(error) or type(error).__name__}

@@ -87,7 +87,61 @@ def last_upgrade(log=Path('/var/log/pacman.log')):
         return None
 
 
-def status():
+def vpn_status(state_file=None):
+    """The Mullvad app's state (None without one). state_file: optional JSON with "last_drop"
+    (unix seconds), written by whatever watches the VPN on that machine; set in hosts.json."""
+    if not shutil.which('mullvad'):
+        return None
+    try:
+        out = subprocess.run(['mullvad', 'status', '--json'], capture_output=True, text=True, timeout=5).stdout.strip()
+        raw = json.loads(out.splitlines()[-1])
+    except (OSError, subprocess.TimeoutExpired, json.JSONDecodeError, IndexError):
+        return {'kind': 'mullvad', 'state': 'unknown', 'problems': ['the Mullvad daemon is not answering'], 'ok': False}
+    details = raw.get('details') if isinstance(raw.get('details'), dict) else {}
+    loc = details.get('location') or {}
+    state = raw.get('state', 'unknown')
+    lock = subprocess.run(['mullvad', 'lockdown-mode', 'get'], capture_output=True, text=True, timeout=5).stdout
+    vpn = {'kind': 'mullvad', 'state': state, 'relay': loc.get('hostname'), 'city': loc.get('city'),
+           'exit_ip': loc.get('ipv4') or loc.get('ipv6'), 'lockdown': bool(re.search(r':\s*on\b', lock, re.I)),
+           'last_drop': None, 'problems': []}
+    if state == 'error':
+        cause = details.get('cause')
+        vpn['problems'].append('blocked: ' + (cause if isinstance(cause, str) else json.dumps(cause)))
+    if state == 'connected' and loc.get('mullvad_exit_ip') is False:
+        vpn['problems'].append(f"exit {vpn['exit_ip']} is not a Mullvad address")
+    if state_file:
+        try:
+            drop = json.loads(Path(state_file).expanduser().read_text()).get('last_drop')
+            vpn['last_drop'] = drop if isinstance(drop, (int, float)) else None
+        except (OSError, json.JSONDecodeError, AttributeError):
+            pass
+    vpn['ok'] = not vpn['problems']
+    return vpn
+
+
+VPN_LOCATION = re.compile(r'^[a-z0-9-]{2,24}$')
+
+
+def vpn_action(request):
+    """connect / disconnect / reconnect / relay ("se sto", "se-sto-wg-001", ...) through the Mullvad CLI."""
+    if not shutil.which('mullvad'):
+        raise RuntimeError('Mullvad is not installed on this machine.')
+    action = request['action'].removeprefix('vpn-')
+    if action in ('connect', 'disconnect', 'reconnect'):
+        return command(['mullvad', action], timeout=20)
+    if action == 'relay':
+        words = str(request.get('value') or '').lower().split()
+        if not 1 <= len(words) <= 3 or not all(VPN_LOCATION.match(w) for w in words):
+            raise ValueError('Relay: a country code, "country city", or a hostname like se-sto-wg-001.')
+        result = command(['mullvad', 'relay', 'set', 'location', *words], timeout=20)
+        if not result['code'] and (vpn_status() or {}).get('state') not in ('connected', 'connecting'):
+            command(['mullvad', 'connect'], timeout=20)
+        return result
+    raise ValueError('Unsupported VPN action.')
+
+
+def status(options=None):
+    options = options or {}
     before, net_before, started = cpu_sample(), net_sample(), time.monotonic()
     time.sleep(0.25)
     after, net_after, elapsed = cpu_sample(), net_sample(), time.monotonic() - started
@@ -109,6 +163,7 @@ def status():
         'load': list(os.getloadavg()), 'battery': batteries,
         'net_rx': max(0, net_after[0] - net_before[0]) / elapsed, 'net_tx': max(0, net_after[1] - net_before[1]) / elapsed,
         'last_upgrade': last_upgrade(), 'disks': [{'name': '/', 'used': disk.used, 'total': disk.total}],
+        'vpn': vpn_status(options.get('vpn_state')),
         **sensors(),
     }
 
@@ -210,12 +265,15 @@ def dispatch(request):
         return read_wayland(env) if action == 'clipboard-get' else write_wayland(request.get('value') or {}, env)
     if action == 'clipboard-history':
         from clipboards import cliphist_history
-        return cliphist_history()
+        limit = request.get('value')
+        return cliphist_history(max(1, min(limit, 1000)) if isinstance(limit, int) and not isinstance(limit, bool) else 10)
     if action == 'clipboard-entry':
         from clipboards import cliphist_entry
         return cliphist_entry(request.get('value'))
     if action == 'status':
-        return status()
+        return status(request.get('value') if isinstance(request.get('value'), dict) else None)
+    if action in ('vpn-connect', 'vpn-disconnect', 'vpn-reconnect', 'vpn-relay'):
+        return vpn_action(request)
     if action == 'processes':
         from processes import collect
         return collect()

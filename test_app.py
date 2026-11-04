@@ -7,6 +7,7 @@ import unittest
 from unittest.mock import patch, AsyncMock
 import json
 import struct
+import tempfile
 import zlib
 
 from rich.text import Text
@@ -15,8 +16,8 @@ from textual.widgets import Button, Checkbox, DataTable, Input, RichLog, Static,
 
 import helper
 import app as app_module
-from app import Archfleet, Confirm, Prompt, ago, screentime_text, sharing_text
-from backend import Backend, NODES, lan_label, load_nodes, magic_packet, marquee_config, parse_news
+from app import Archfleet, Confirm, Prompt, ago, screentime_text, sharing_text, since, vpn_lines, vpn_short
+from backend import Backend, NODES, lan_label, load_nodes, magic_packet, marquee_config, parse_news, windows_vpn
 from clipboards import from_bytes, payload_bytes
 
 
@@ -442,6 +443,116 @@ class AppTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(json.loads(arguments.kwargs['input_data']), {'action': action, 'value': value})
 
 
+    async def test_vpn_tab_shows_every_machine_and_runs_actions(self):
+        backend = FakeBackend()
+        base = backend.status
+        async def status(node):
+            data = await base(node)
+            data['vpn'] = {
+                'arch-desktop': {'kind': 'mullvad', 'state': 'connected', 'relay': 'se-sto-wg-001', 'city': 'Stockholm', 'exit_ip': '203.0.113.7', 'lockdown': False, 'last_drop': None, 'problems': [], 'ok': True},
+                'arch-laptop': {'kind': 'mullvad', 'state': 'disconnected', 'relay': None, 'city': None, 'exit_ip': None, 'lockdown': True, 'last_drop': 1, 'problems': [], 'ok': True},
+                'home-server': {'kind': 'tunnel', 'state': 'down', 'relay': 'se-sto-wg-002', 'city': None, 'exit_ip': None, 'lockdown': None, 'last_drop': 2, 'problems': ['tunnel has no recent handshake'], 'ok': False},
+            }[node['alias']]
+            return data
+        backend.status = status
+        app = Archfleet(backend)
+        async with app.run_test(size=(130, 46)) as pilot:
+            await app.workers.wait_for_complete()
+            fleet = app.query_one('#fleet', DataTable)
+            self.assertEqual(str(fleet.get_row('arch-desktop')[-1]), 'on · Stockholm')
+            self.assertEqual(str(fleet.get_row('home-server')[-1]), 'DOWN !')
+            app.query_one('#tabs', TabbedContent).active = 'vpn'
+            await pilot.pause()
+            table = app.query_one('#vpn-table', DataTable)
+            self.assertEqual(table.row_count, 3)
+            self.assertEqual(str(table.get_row('arch-laptop')[2]), 'off · lockdown')
+            self.assertIn('203.0.113.7', str(app.query_one('#vpn-detail', Static).render()))
+            self.assertFalse(app.query_one('#vpn-connect', Button).disabled)
+            self.assertTrue(app.query_one('#vpn-restart', Button).disabled)
+            await pilot.click('#vpn-relay')
+            self.assertIsInstance(app.screen, Prompt)
+            await pilot.press(*'se got')
+            await pilot.press('enter')
+            await app.workers.wait_for_complete()
+            self.assertIn(('arch-desktop', 'vpn-relay', 'se got'), backend.calls)
+            await pilot.click('#vpn-disconnect')
+            self.assertIsInstance(app.screen, Confirm)
+            await pilot.press('escape')
+            self.assertFalse(any(action == 'vpn-disconnect' for _, action, _ in backend.calls))
+            await pilot.press('3')
+            await pilot.pause()
+            self.assertTrue(app.query_one('#vpn-connect', Button).disabled)   # Windows: no Mullvad app controls
+            self.assertFalse(app.query_one('#vpn-test', Button).disabled)    # hosts.json names a test command
+            self.assertIn('tunnel has no recent handshake', str(app.query_one('#vpn-detail', Static).render()))
+            await pilot.click('#vpn-test')
+            await app.workers.wait_for_complete()
+            self.assertIn(('home-server', 'vpn-test', None), backend.calls)
+            await pilot.click('#vpn-restart')
+            self.assertIsInstance(app.screen, Confirm)
+
+    async def test_status_passes_the_vpn_state_file_from_hosts_json(self):
+        backend = Backend()
+        with patch.object(Backend, 'call', AsyncMock(return_value={'cpu': 1})) as call:
+            await backend.status(NODES[0])
+            call.assert_awaited_with(NODES[0], 'status', {'vpn_state': '~/.local/state/example/vpn.json'})
+
+
+class VpnTests(unittest.TestCase):
+    def test_short_text_and_detail(self):
+        self.assertEqual(vpn_short(None), '—')
+        self.assertEqual(vpn_short({'state': 'error', 'problems': ['x']}), 'BLOCKED !')
+        self.assertEqual(vpn_short({'kind': 'mullvad', 'state': 'disconnected', 'lockdown': False}), 'off')
+        self.assertEqual(since(1000, now=1040), '40 s ago')
+        self.assertEqual(since(0), '—')
+        self.assertEqual(since(1000, now=1000 + 3 * 3600), '3 h ago')
+        text = vpn_lines('geofront', {'kind': 'tunnel', 'state': 'connected', 'relay': 'r1', 'exit_ip': '203.0.113.9', 'city': 'Stockholm',
+                                      'lockdown': None, 'last_drop': 100, 'last_leak': 50, 'problems': []}, now=160)
+        self.assertIn('torrent split tunnel', text)
+        self.assertIn('last drop 60 s ago', text)
+        self.assertIn('last leak alarm', text)
+        self.assertNotIn('lockdown', text)
+
+    def test_windows_status_file_is_normalised(self):
+        import datetime
+        now = datetime.datetime.now(datetime.timezone.utc)
+        raw = {'at': now.isoformat(), 'tunnel': 'up', 'server': 'se-sto-wg-001', 'ok': True, 'problems': [],
+               'exit': {'ok': True, 'ip': '203.0.113.9', 'city': 'Stockholm', 'provider': True},
+               'lastLeakAt': '2026-11-04T23:57:55.2915319+01:00', 'lastDropAt': None}
+        vpn = windows_vpn(raw)
+        self.assertEqual((vpn['state'], vpn['relay'], vpn['exit_ip'], vpn['ok']), ('connected', 'se-sto-wg-001', '203.0.113.9', True))
+        self.assertAlmostEqual(vpn['last_leak'], datetime.datetime(2026, 11, 4, 22, 57, 55, 291531, tzinfo=datetime.timezone.utc).timestamp(), places=0)
+        stale = windows_vpn(dict(raw, at='2020-01-01T00:00:00+00:00', exit={'ok': True, 'ip': '198.51.100.1', 'provider': False}))
+        self.assertFalse(stale['ok'])
+        self.assertEqual(len(stale['problems']), 2)
+        self.assertEqual(windows_vpn(dict(raw, tunnel='down'))['state'], 'down')
+        self.assertIsNone(windows_vpn(None))
+
+    def test_helper_reads_mullvad_and_validates_relays(self):
+        import subprocess, tempfile
+        from pathlib import Path
+        status = {'state': 'connected', 'details': {'location': {'hostname': 'se-sto-wg-003', 'city': 'Stockholm', 'ipv4': '203.0.113.5', 'mullvad_exit_ip': False}}}
+        def fake_run(argv, **kwargs):
+            out = json.dumps(status) if argv[1] == 'status' else 'Block traffic when the VPN is disconnected: on\n'
+            return subprocess.CompletedProcess(argv, 0, out, '')
+        with tempfile.TemporaryDirectory() as folder, patch('helper.shutil.which', return_value='/usr/bin/mullvad'), patch('helper.subprocess.run', side_effect=fake_run):
+            state = Path(folder) / 'vpn.json'
+            state.write_text(json.dumps({'last_drop': 1700000000}))
+            vpn = helper.vpn_status(str(state))
+        self.assertEqual((vpn['relay'], vpn['exit_ip'], vpn['lockdown'], vpn['last_drop']), ('se-sto-wg-003', '203.0.113.5', True, 1700000000))
+        self.assertFalse(vpn['ok'])
+        self.assertIn('not a Mullvad address', vpn['problems'][0])
+        with patch('helper.shutil.which', return_value=None):
+            self.assertIsNone(helper.vpn_status())
+        with patch('helper.shutil.which', return_value='/usr/bin/mullvad'), patch('helper.command') as command:
+            for bad in ('', 'se; rm -rf ~', 'a b c d', '../x'):
+                with self.assertRaises(ValueError):
+                    helper.dispatch({'action': 'vpn-relay', 'value': bad})
+            command.assert_not_called()
+            command.return_value = {'code': 0, 'text': ''}
+            helper.dispatch({'action': 'vpn-disconnect'})
+            command.assert_called_with(['mullvad', 'disconnect'], timeout=20)
+
+
 class HelperTests(unittest.TestCase):
     def test_screen_time_text(self):
         data = screentime_sample()
@@ -496,13 +607,36 @@ class HelperTests(unittest.TestCase):
         self.assertNotIn('\\', clipdeck.describe("printf '%s\\n' x")[0])
         col = clipdeck.column(NODES[1], 1)
         clipdeck.fill_history(col, [{'id': i, 'preview': f'entry {i}'} for i in range(14)])
-        self.assertEqual([it['key'] for it in col['items']], list('QWERTYUIOP'))
+        self.assertEqual(len(col['items']), 14)
+        self.assertEqual([it['key'] for it in clipdeck.page_of(col, 0)], list('QWERTYUIOP'))
+        self.assertEqual([(it['key'], it['id']) for it in clipdeck.page_of(col, 1)], list(zip('QWER', range(10, 14))))
         server = clipdeck.column(NODES[2], 2)
         clipdeck.fill_current(server, {'kind': 'empty'})
         self.assertEqual((server['state'], server['items']), ('empty', []))
         clipdeck.fill_current(server, {'kind': 'text', 'text': 'from\nwindows'})
-        self.assertEqual(server['items'], [{'key': 'A', 'label': 'from windows', 'img': False}])
-        self.assertNotIn('id', clipdeck.for_eww({'cols': [col]})['cols'][0]['items'][0])
+        self.assertEqual(clipdeck.page_of(server, 0), [{'key': 'A', 'label': 'from windows', 'img': False}])
+        view = clipdeck.for_eww({'cols': [col, server]})
+        self.assertNotIn('id', view['cols'][0]['items'][0])
+        self.assertEqual((view['page'], view['pages'], view['cols'][0]['span']), (1, 2, '1–10 / 14'))
+        view = clipdeck.for_eww({'page': 1, 'cols': [col, server]})
+        self.assertEqual([it['label'] for it in view['cols'][0]['items']], [f'entry {i}' for i in range(10, 14)])
+        self.assertEqual((view['cols'][1]['items'], view['cols'][1]['note']), ([], 'end of history · 1 entries'))
+
+    def test_clipdeck_paging_and_pick(self):
+        import clipdeck
+        with tempfile.TemporaryDirectory() as tmp, \
+                patch.object(clipdeck, 'RUNTIME', _Path(tmp)), patch.object(clipdeck, 'STATE', _Path(tmp) / 'deck.json'):
+            col = clipdeck.column(NODES[0], 0, local=True)
+            clipdeck.fill_history(col, [{'id': i, 'preview': f'entry {i}'} for i in range(25)])
+            clipdeck.save({'open': True, 'page': 0, 'cols': [col]})
+            for direction, page in (('prev', 0), ('next', 1), ('down', 2), ('next', 2), ('up', 1), ('first', 0), ('last', 2)):
+                clipdeck.cmd_page(direction)
+                self.assertEqual(clipdeck.load()['page'], page, direction)
+            clipdeck.cmd_page('prev')
+            with patch.object(clipdeck, 'cmd_hide'), patch.object(clipdeck, 'fetch_bytes', return_value=(b'x', None)) as fetch, \
+                    patch.object(clipdeck.subprocess, 'run'):
+                clipdeck.cmd_pick('2')
+            self.assertEqual(fetch.call_args.args[1]['id'], 11)
 
     def test_windows_history_and_current_fallback(self):
         import clipdeck
