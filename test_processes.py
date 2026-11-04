@@ -158,7 +158,7 @@ class ProcessViewTests(unittest.IsolatedAsyncioTestCase):
             await app.workers.wait_for_complete()
             await pilot.pause()
             self.assertEqual(app.query_one('#proc-table', DataTable).row_count, 0)
-            self.assertIn("Can't read processes on homeserverino", str(app.query_one('#proc-status').render()))
+            self.assertIn("Can't read processes on geofront", str(app.query_one('#proc-status').render()))
 
     async def test_windows_script_travels_on_stdin(self):
         payload = json.dumps(dict(SAMPLE, platform='windows'))
