@@ -1,0 +1,47 @@
+// clipdeck's bundled look. Change the six colours to match your theme.
+$bg:     #11111b;
+$line:   #313244;
+$fg:     #cdd6f4;
+$dim:    #7f849c;
+$accent: #89b4fa;
+$alt:    #f5c2e7;
+
+* {
+  all: unset;
+  font-family: "JetBrainsMono Nerd Font", monospace;
+}
+
+.deck {
+  background-color: rgba(17, 17, 27, 0.95);
+  border: 1px solid $line;
+  border-top: 3px solid $accent;
+  padding: 14px 16px;
+  color: $fg;
+}
+.head        { margin-bottom: 16px; }
+.brand-sm    { font-size: 13px; font-weight: 800; color: $accent; }
+.count       { font-size: 11px; font-weight: 700; color: $alt; }
+.keys-count  { margin-left: 12px; }
+.hint        { font-size: 10px; color: $dim; margin-top: 8px; }
+.deck-groups { margin-top: 12px; }
+.deck-group  { min-width: 210px; }
+.deck-gname  { font-size: 10px; color: $dim; margin-bottom: 6px; }
+.deck-item   { margin: 3px 0; }
+.key {
+  font-size: 12px;
+  font-weight: 800;
+  min-width: 28px;
+  padding: 2px 6px;
+  color: $bg;
+  background-color: $accent;
+}
+.deck-label  { font-size: 12px; }
+
+.clipdeck          { min-width: 1150px; }
+.clipdeck-col      { min-width: 360px; }
+.clipdeck-name     { color: $fg; font-weight: 800; }
+.clipdeck-key      { min-width: 28px; font-size: 11px; }
+.clipdeck-hit:hover .deck-label { color: $accent; }
+.clipdeck-img      { color: $alt; }
+.clipdeck-note     { font-size: 11px; color: $dim; margin: 3px 0; }
+.clipdeck-note.off { color: $alt; }

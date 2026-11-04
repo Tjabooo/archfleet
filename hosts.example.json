@@ -1,0 +1,5 @@
+[
+  {"alias": "desktop", "label": "Desktop", "hostname": "my-desktop", "address": "192.168.1.20", "user": "me", "os": "linux", "mac": "00:11:22:33:44:55"},
+  {"alias": "laptop", "label": "Laptop", "hostname": "my-laptop", "address": "192.168.1.21", "user": "me", "os": "linux"},
+  {"alias": "server", "label": "Home server", "hostname": "my-server", "address": "192.168.1.10", "user": "me", "os": "windows"}
+]
