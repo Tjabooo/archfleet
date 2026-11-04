@@ -19,6 +19,7 @@ VerticalScroll { height: 1fr; }
 #history { height: 3; color: #79e2c2; margin-bottom: 1; }
 #details { height: auto; min-height: 2; color: #a6b7d0; }
 #sharing-box { height: auto; }
+#screentime-box { height: auto; margin-top: 1; }
 #sharing { height: auto; color: #a6b7d0; }
 #upload-history { height: 3; color: #79e2c2; margin-bottom: 1; }
 .actions { height: auto; min-height: 3; margin: 1 0; }

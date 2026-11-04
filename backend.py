@@ -77,6 +77,9 @@ def marquee_config(env_file=MARQUEE_ENV, server_env=MARQUEE_SERVER_ENV):
     return None
 NEWS_FEED = 'https://archlinux.org/feeds/news/'
 SPEED_BYTES = 64 * 1024 * 1024
+# Screen Time (github.com/Tjabooo/screentime). SSH logins don't have ~/.local/bin on PATH.
+# A machine can override it with "screentime_command" in hosts.json.
+SCREENTIME_COMMAND = 'PATH="$HOME/.local/bin:$PATH" screentime today --json'
 # On Windows, Git Bash's ssh can come first on PATH; only Windows OpenSSH reads the homelab aliases.
 _WIN_OPENSSH = Path(r'C:\Windows\System32\OpenSSH')
 SSH, SCP = ((str(_WIN_OPENSSH / 'ssh.exe'), str(_WIN_OPENSSH / 'scp.exe'))
@@ -327,6 +330,26 @@ class Backend:
             except (urllib.error.URLError, TimeoutError, OSError) as error:
                 raise RuntimeError(f'Marquee isn’t answering at {url}.') from error
         return await asyncio.to_thread(fetch)
+
+    async def screentime(self, node):
+        """Today's Screen Time on an Arch machine: `screentime today --json` over SSH."""
+        if node['os'] != 'linux':
+            raise ValueError('Screen Time runs on the Arch machines.')
+        command = node.get('screentime_command') or SCREENTIME_COMMAND
+        if self.is_local(node):
+            argv = ['/bin/sh', '-c', command]
+        else:
+            argv = [*SSH_BASE, '-T', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=5', node['alias'], command]
+        code, output, error = await run(argv, timeout=20)
+        if code == 127 or 'not found' in (error or ''):
+            raise RuntimeError(f"screentime isn’t installed on {node['hostname']} (github.com/Tjabooo/screentime).")
+        try:
+            data = json.loads(output)
+        except json.JSONDecodeError:
+            raise RuntimeError((error or output or 'screentime gave no answer.').strip().splitlines()[-1][:200]) from None
+        if not isinstance(data, dict) or 'total' not in data:
+            raise RuntimeError('screentime answered something unexpected.')
+        return data
 
     async def run_command(self, node, command, timeout=60):
         """Run one shell command on a machine: its login shell on Arch, cmd.exe on Windows."""

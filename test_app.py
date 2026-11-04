@@ -15,7 +15,7 @@ from textual.widgets import Button, Checkbox, DataTable, Input, RichLog, Static,
 
 import helper
 import app as app_module
-from app import Archfleet, Confirm, Prompt, ago, sharing_text
+from app import Archfleet, Confirm, Prompt, ago, screentime_text, sharing_text
 from backend import Backend, NODES, lan_label, load_nodes, magic_packet, marquee_config, parse_news
 from clipboards import from_bytes, payload_bytes
 
@@ -24,6 +24,16 @@ def test_png():
     def chunk(name, data):
         return struct.pack('>I', len(data)) + name + data + struct.pack('>I', zlib.crc32(name + data))
     return b'\x89PNG\r\n\x1a\n' + chunk(b'IHDR', struct.pack('>IIBBBBB', 2, 1, 8, 6, 0, 0, 0)) + chunk(b'IDAT', zlib.compress(b'\x00\xff\x00\x00\xff\x00\xff\x00\xff')) + chunk(b'IEND', b'')
+
+
+def screentime_sample(host='magi'):
+    hourly = [{'hour': h, 'seconds': 1800 if h in (9, 10) else 0, 'categories': {'Development': 1200, 'Web': 600} if h in (9, 10) else {}} for h in range(24)]
+    return {'device': host, 'date': '2026-11-04', 'total': 3600, 'hourly': hourly, 'pickups': 4, 'first_pickup': '08:55',
+            'apps': [{'app': 'kitty', 'name': 'Kitty', 'category': 'Development', 'seconds': 2400},
+                     {'app': 'firefox', 'name': 'Firefox', 'category': 'Web', 'seconds': 1200}],
+            'categories': [{'name': 'Development', 'seconds': 2400}, {'name': 'Web', 'seconds': 1200}],
+            'longest_session': {'seconds': 2700, 'start': '09:00', 'end': '09:45', 'app': 'kitty', 'name': 'Kitty'},
+            'daemon': {'running': True, 'state': 'active', 'app': 'kitty'}}
 
 
 class FakeBackend:
@@ -45,6 +55,10 @@ class FakeBackend:
         if action == 'hypr':
             return {'version': {'version': '0.57.0'}, 'monitors': [{'name': 'DP-1', 'width': 1920, 'height': 1080, 'refreshRate': 144}], 'workspaces': [{'id': 1, 'name': '1', 'monitor': 'DP-1', 'windows': 1}, {'address': 'special:music', 'type': 'special', 'name': 'special:music', 'monitor': 'DP-1', 'windows': 0}], 'clients': [{'class': 'kitty', 'title': 'Terminal', 'workspace': {'name': '1'}, 'address': '0xabc'}], 'activeworkspace': {'id': 1}}
         return {'code': 0, 'text': 'test result'}
+
+    async def screentime(self, node):
+        self.calls.append((node['alias'], 'screentime', None))
+        return screentime_sample(node['hostname'])
 
     def wake(self, node):
         self.calls.append((node['alias'], 'wake', None))
@@ -131,6 +145,41 @@ class AppTests(unittest.IsolatedAsyncioTestCase):
             await app.workers.wait_for_complete()
             await pilot.pause()
             self.assertIn('480 Mbit/s', str(app.query_one('#speed-result', Static).render()))
+
+    async def test_screen_time_panel_reads_each_arch_machine(self):
+        backend = FakeBackend()
+        app = Archfleet(backend)
+        async with app.run_test(size=(120, 60)) as pilot:
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+            box = app.query_one('#screentime-box')
+            text = str(app.query_one('#screentime', Static).render())
+            self.assertTrue(box.display)
+            self.assertIn('1h 00m today', text)
+            self.assertIn('first at 08:55', text)
+            self.assertIn('now active in Kitty', text)
+            self.assertIn('today on ' + app.selected['hostname'], str(app.query_one('#screentime-label', Static).render()))
+            await pilot.press('3')  # the Windows server: no Screen Time
+            await pilot.pause()
+            self.assertFalse(box.display)
+            await pilot.press('2')
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+            asked = [alias for alias, action, _ in backend.calls if action == 'screentime']
+            self.assertEqual(len(set(asked)), 2)
+            self.assertNotIn('home-server', asked)
+            self.assertTrue(box.display)
+
+    async def test_screen_time_errors_show_in_the_panel(self):
+        backend = FakeBackend()
+        async def missing(node):
+            raise RuntimeError(f"screentime isn’t installed on {node['hostname']}")
+        backend.screentime = missing
+        app = Archfleet(backend)
+        async with app.run_test(size=(120, 60)) as pilot:
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+            self.assertIn('isn’t installed', str(app.query_one('#screentime', Static).render()))
 
     async def test_sharing_panel_shows_marquee_load_on_the_server_only(self):
         backend = FakeBackend()
@@ -394,6 +443,20 @@ class AppTests(unittest.IsolatedAsyncioTestCase):
 
 
 class HelperTests(unittest.TestCase):
+    def test_screen_time_text(self):
+        data = screentime_sample()
+        text = screentime_text(data)
+        self.assertIn('[b]1h 00m[/b] today', text)
+        self.assertIn('4 pickups, first at 08:55', text)
+        self.assertIn('longest 45m (09:00–09:45)', text)
+        self.assertIn('Kitty', text)
+        self.assertIn('Development 40m', text)
+        self.assertIn('█', text)  # the busiest hour gets a full bar
+        data['daemon'] = {'running': False}
+        self.assertIn('isn’t running', screentime_text(data))
+        empty = screentime_text({'total': 0, 'hourly': [], 'apps': [], 'categories': []})
+        self.assertIn('Nothing used yet today', empty)
+
     def test_clipboard_png_and_unicode_roundtrip(self):
         image, data = payload_bytes(from_bytes(test_png(), 'image/png'))
         self.assertEqual((image['width'], image['height']), (2, 1))

@@ -9,6 +9,8 @@ other machines, no open ports and no background services.
 - **Overview**: CPU (with temperature), GPU busy and temperature, memory, every drive, network rate,
   uptime, battery, last full upgrade, CPU history, the status of the whole fleet, and an SSH link
   speed test.
+- **Screen Time** (Overview, Arch machines): today's total, pickups, hourly bars and most used apps from
+  [screentime](https://github.com/Tjabooo/screentime) (`screentime today --json` over SSH, every minute).
 - **Wake-on-LAN**: a machine that's off gets a Wake button (or `archfleet --wake <alias>`).
 - **Processes**: every process with its CPU, GPU, memory, disk and network use, sortable and
   filterable, plus machine totals. You can end your own processes.
@@ -70,6 +72,7 @@ the same file on every machine:
 | `os` | `linux` or `windows` |
 | `mac` | Optional: the wired MAC address, which enables Wake-on-LAN |
 | `helper`, `clipboard_client` | Optional: non-default paths of the Linux helper / Windows clipboard client |
+| `screentime_command` | Optional: how to run `screentime today --json` there (default: from `~/.local/bin` or `PATH`) |
 | `marquee` | Optional: `true` on the machine running [Marquee](https://github.com/Tjabooo/marquee), to show its sharing load |
 
 Keys 1–9 select machines in the order listed.

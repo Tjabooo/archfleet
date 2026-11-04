@@ -198,6 +198,67 @@ def sharing_text(load, now_ms=None):
     return '\n'.join(lines)
 
 
+# Screen Time: `screentime today --json` from each Arch machine (github.com/Tjabooo/screentime).
+CATEGORY_COLORS = {'Social': '#e2668a', 'Games': '#ee8a4a', 'Entertainment': '#9b7fe8', 'Web': '#4f92e3',
+                   'Development': '#2fb3a4', 'Productivity': '#e0ae37', 'Creativity': '#5dbb6e',
+                   'Education': '#c8955a', 'Utilities': '#8e98ab', 'Other': MUTED}
+BLOCKS = ' ▁▂▃▄▅▆▇█'
+
+
+def st_duration(seconds):
+    """3h 42m · 12m · <1m · 0m"""
+    seconds = round(seconds or 0)
+    if not seconds:
+        return '0m'
+    if seconds < 60:
+        return '<1m'
+    hours, minutes = divmod(seconds // 60, 60)
+    return f'{hours}h {minutes:02d}m' if hours else f'{minutes}m'
+
+
+def screentime_text(data, width=48):
+    """One machine's Screen Time today as Rich markup: total, pickups, hourly bars, most used, categories."""
+    color = lambda category: CATEGORY_COLORS.get(category, MUTED)
+    lines = []
+    daemon = data.get('daemon') or {}
+    if daemon and not daemon.get('running'):
+        lines.append(f"[{BAD}]The screentime daemon isn’t running (systemctl --user start screentime): numbers stop at its last write.[/]")
+    head = [f"[b]{st_duration(data.get('total'))}[/b] today"]
+    if data.get('pickups') is not None:
+        head.append(f"{data['pickups']} pickup{'' if data['pickups'] == 1 else 's'}" + (f", first at {data['first_pickup']}" if data.get('first_pickup') else ''))
+    longest = data.get('longest_session')
+    if longest:
+        head.append(f"longest {st_duration(longest['seconds'])} ({longest['start']}–{longest['end']})")
+    if daemon.get('running') and daemon.get('state'):
+        app = next((a['name'] for a in data.get('apps') or [] if a['app'] == daemon.get('app')), daemon.get('app'))
+        head.append(f"now {escape(daemon['state'])}" + (f" in {escape(app)}" if app and daemon['state'] == 'active' else ''))
+    lines.append('  ·  '.join(head))
+    hourly = data.get('hourly') or []
+    top = max((h.get('seconds') or 0 for h in hourly), default=0)
+    if top:
+        cols = []
+        for hour in hourly:
+            seconds = hour.get('seconds') or 0
+            cats = hour.get('categories') or {}
+            lead = max(cats, key=cats.get) if cats else 'Other'
+            block = BLOCKS[max(1, min(8, round(8 * seconds / top)))] if seconds else ' '
+            cols.append(f'[{color(lead)}]{block * 2}[/]' if seconds else '  ')
+        lines.append(''.join(cols))
+        lines.append(f'[{MUTED}]' + ''.join(f'{h:02d}'.ljust(12) for h in (0, 6, 12, 18)) + '[/]')
+    apps = data.get('apps') or []
+    if apps:
+        best = apps[0]['seconds'] or 1
+        for app in apps[:5]:
+            filled = max(1, round(16 * app['seconds'] / best))
+            lines.append(f"{escape(app['name'][:18]):<18} {st_duration(app['seconds']):>7}  [{color(app['category'])}]{'━' * filled}[/][#2a3c55]{'─' * (16 - filled)}[/]  [{MUTED}]{escape(app['category'])}[/]")
+    else:
+        lines.append(f'[{MUTED}]Nothing used yet today.[/]')
+    categories = data.get('categories') or []
+    if categories:
+        lines.append('   '.join(f"[{color(c['name'])}]●[/] {escape(c['name'])} {st_duration(c['seconds'])}" for c in categories[:4]))
+    return '\n'.join(lines)
+
+
 def size_text(value):
     """Bytes sent, decimal: 858 MB, 3.6 GB."""
     value = value or 0
@@ -224,6 +285,7 @@ PROCESS_COLUMNS = [
 ]
 PROCESS_LIMIT = 200
 PROCESS_INTERVAL = 3
+SCREENTIME_INTERVAL = 60  # seconds between Screen Time reads of the selected Arch machine
 
 
 def process_value(process, key):
@@ -401,6 +463,7 @@ class Archfleet(App):
         self.prompt_values = {}
         self.sharing = None
         self.sharing_error = None
+        self.screentime = {}  # alias -> {'data', 'error', 'at'}
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
@@ -438,6 +501,9 @@ class Archfleet(App):
                                 yield Static('Reading Marquee…', id='sharing')
                                 yield Static('INTERNET UPLOAD  ·  last hour', classes='eyebrow', id='upload-label')
                                 yield UploadHistory([], id='upload-history')
+                            with Vertical(id='screentime-box'):
+                                yield Static('SCREEN TIME  ·  today', classes='eyebrow', id='screentime-label')
+                                yield Static('Reading Screen Time…', id='screentime')
                             yield DataTable(id='fleet', cursor_type='row', zebra_stripes=True)
                     with TabPane('Processes', id='processes'):
                         with Vertical(id='process-pane'):
@@ -550,6 +616,7 @@ class Archfleet(App):
         self.set_interval(15, self.refresh_status)
         self.set_interval(PROCESS_INTERVAL, self.process_tick)
         self.set_interval(1, self.wake_tick)
+        self.set_interval(SCREENTIME_INTERVAL, self.screentime_tick)
 
     def log_event(self, text):
         timestamp = datetime.datetime.now().strftime('%H:%M:%S')
@@ -570,6 +637,7 @@ class Archfleet(App):
         self.hypr_data = {}
         self.render_status()
         self.render_speed()
+        self.screentime_tick()
         if self.query_one('#tabs', TabbedContent).active == 'hyprland' and node['os'] == 'linux':
             self.refresh_hypr()
         if self.process_node != node:
@@ -648,8 +716,48 @@ class Archfleet(App):
             self.query_one('#details', Static).update(data.get('error', 'Checking connection…'))
         self.query_one('#history', Sparkline).data = list(self.histories[self.selected['alias']])
         self.render_sharing()
+        self.render_screentime()
         self.render_wake()
         self.render_speed()
+
+    def screentime_tick(self):
+        """Refresh the selected Arch machine's Screen Time when it's older than a minute."""
+        node = self.selected
+        if node['os'] != 'linux' or not hasattr(self.backend, 'screentime'):
+            return
+        entry = self.screentime.get(node['alias'])
+        if not entry or time.monotonic() - entry['at'] >= SCREENTIME_INTERVAL - 1:
+            self.refresh_screentime(node)
+
+    @work(group='screentime')
+    async def refresh_screentime(self, node):
+        entry = self.screentime.setdefault(node['alias'], {'data': None, 'error': None, 'at': 0})
+        entry['at'] = time.monotonic()
+        try:
+            entry['data'], entry['error'] = await self.backend.screentime(node), None
+            entry['read'] = datetime.datetime.now().strftime('%H:%M')
+        except Exception as error:
+            entry['error'] = str(error) or type(error).__name__
+        if self.selected['alias'] == node['alias']:
+            self.render_screentime()
+
+    def render_screentime(self):
+        box = self.query_one('#screentime-box')
+        node = self.selected
+        box.display = node['os'] == 'linux' and hasattr(self.backend, 'screentime')
+        if not box.display:
+            return
+        entry = self.screentime.get(node['alias']) or {}
+        data, error = entry.get('data'), entry.get('error')
+        label = f"SCREEN TIME  ·  today on {node['hostname']}" + (f"  ·  read {entry['read']}" if data and entry.get('read') else '')
+        self.query_one('#screentime-label', Static).update(label)
+        if data:
+            text = screentime_text(data)
+            if error:
+                text = f'[{BAD}]Last read failed: {escape(error)}[/]\n' + text
+        else:
+            text = f'[{BAD}]{escape(error)}[/]' if error else 'Reading Screen Time…'
+        self.query_one('#screentime', Static).update(text)
 
     def render_sharing(self):
         box = self.query_one('#sharing-box')
