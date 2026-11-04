@@ -15,9 +15,15 @@ bin_dir = home / '.local' / 'bin'
 bin_dir.mkdir(parents=True, exist_ok=True)
 
 
+def shell_path(path):
+    """$HOME/... when under the home folder, so the launchers survive being copied into dotfiles."""
+    path = Path(path)
+    return '$HOME/' + path.relative_to(home).as_posix() if path.is_relative_to(home) else str(path)
+
+
 def wrapper(name, python, script):
     path = bin_dir / name
-    path.write_text(f'#!/bin/sh\nexec "{python}" "{root / script}" "$@"\n')
+    path.write_text(f'#!/bin/sh\nexec "{shell_path(python)}" "{shell_path(root / script)}" "$@"\n')
     path.chmod(0o755)
     return path
 
