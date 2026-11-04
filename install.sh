@@ -14,7 +14,7 @@ for tool in ssh scp; do command -v $tool >/dev/null || echo "note: $tool is miss
 mkdir -p "$dest"
 if [ "$src" != "$dest" ]; then
     # app files only; the venv, logs and your config stay put
-    cp "$src"/*.py "$src"/style.tcss "$src"/icon.svg "$src"/requirements.txt "$src"/hosts.example.json "$dest"/
+    cp "$src"/*.py "$src"/style.tcss "$src"/icon.svg "$src"/requirements.txt "$src"/*.json "$dest"/
     rm -rf "$dest/clipdeck" && cp -r "$src/clipdeck" "$dest/clipdeck"
 fi
 if [ ! -x "$dest/venv/bin/python" ]; then
