@@ -45,3 +45,7 @@ $alt:    #f5c2e7;
 .clipdeck-img      { color: $alt; }
 .clipdeck-note     { font-size: 11px; color: $dim; margin: 3px 0; }
 .clipdeck-note.off { color: $alt; }
+.clipdeck-pager    { margin-left: 18px; }
+.clipdeck-page     { margin: 0 2px; }
+.clipdeck-span     { color: $accent; }
+.key.clipdeck-off  { background-color: $line; color: $dim; }

@@ -46,7 +46,7 @@ function Get-DesktopHistory {
         $taskItems = @(Read-HistoryItems)
         $taskEntries = @()
         foreach ($taskItem in $taskItems) {
-            if ($taskEntries.Count -ge 10) { break }
+            if ($taskEntries.Count -ge 25) { break }  # Windows itself keeps at most 25
             try {
                 $taskContent = $taskItem.Content
                 if ($taskContent.Contains('Bitmap')) {

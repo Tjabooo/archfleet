@@ -1,20 +1,24 @@
 """clipdeck: the SUPER+V clipboard picker, for every machine on the home network.
 
   clipdeck show        open the overlay on the focused monitor and fill it in
-  clipdeck pick KEY    copy that entry to this machine's clipboard, then close
+  clipdeck pick KEY    copy that entry (on the page shown) to this machine's clipboard, then close
+  clipdeck page DIR    flip every column a page: next/prev (or down/up, eww's scroll), first, last
   clipdeck hide        close it
   clipdeck stream      JSON for the eww overlay (eww runs this itself)
 
 One column per machine: this one's cliphist history first, then the other Linux machines' history
 and Windows clipboard history (with its current clipboard as a fallback). Other machines are reached
 over their SSH aliases through Archfleet's helper. Every entry has a key chip like the
-SUPER+/ sheet; the "clip" submap in hyprland.lua binds those keys to `clipdeck pick`.
+SUPER+/ sheet; the "clip" submap in hyprland.lua binds those keys to `clipdeck pick`. Each column
+holds up to CLIPDECK_HISTORY entries (default 100; Windows keeps 25), PER_COLUMN to a page: arrows,
+Page Up/Down or the scroll wheel flip all columns together and the same keys pick from the new page.
 The overlay is an eww window called `clipdeck`: either in your own eww config (any
 ~/.config/*/eww or ~/.config/eww that defines it, so it wears your palette) or the one bundled in
 clipdeck/eww. Set CLIPDECK_EWW to pick a config folder yourself. What's on screen is kept in $XDG_RUNTIME_DIR (RAM, this user only)
 and deleted on close; clipboard contents never go on a command line.
 """
 import base64
+import fcntl
 import json
 import os
 import re
@@ -47,7 +51,11 @@ RUNTIME = Path(os.environ.get('XDG_RUNTIME_DIR', f'/run/user/{os.getuid()}'))
 STATE = RUNTIME / 'clipdeck.json'
 KEY_ROWS = ('1234567890', 'QWERTYUIOP', 'ASDFGHJKL')  # one row of keys per column
 PER_COLUMN = 10
-CLOSED = {'open': False, 'cols': []}
+try:
+    HISTORY = max(PER_COLUMN, min(int(os.environ.get('CLIPDECK_HISTORY', 100)), 1000))
+except ValueError:
+    HISTORY = 100
+CLOSED = {'open': False, 'page': 0, 'cols': []}
 IMAGE = re.compile(r'^\[\[ binary data (.+?) (\w+) (\d+)x(\d+) \]\]$')
 
 
@@ -80,10 +88,11 @@ def column(node, index, local=False):
 
 
 def fill_history(col, entries):
+    """All fetched entries go in `items`; the key chips are handed out per page (see page_of)."""
     col['items'] = []
-    for key, entry in zip(col['keys'], entries[:PER_COLUMN]):
+    for entry in entries[:HISTORY]:
         label, image = ('▣ Windows image', True) if entry.get('kind') == 'image' else describe(entry['preview'])
-        col['items'].append({'key': key, 'id': entry['id'], 'label': label, 'img': image})
+        col['items'].append({'id': entry['id'], 'label': label, 'img': image})
     col['state'], col['note'] = ('ok', '') if col['items'] else ('empty', 'no clipboard history')
 
 
@@ -97,16 +106,16 @@ def fill_current(col, value):
     else:
         col['state'], col['note'] = 'empty', ('clipboard is empty' if kind in ('empty', 'text') else 'only formats it can’t copy')
         return
-    col['items'] = [{'key': col['keys'][0], 'label': label, 'img': image}]
+    col['items'] = [{'label': label, 'img': image}]
     col['state'], col['note'] = 'ok', ''
 
 
 def fetch_column(col, node, backend):
     if node['os'] == 'linux':
-        fill_history(col, time_boxed(backend.call(node, 'clipboard-history')))
+        fill_history(col, time_boxed(backend.call(node, 'clipboard-history', HISTORY)))
         return
     try:
-        history = time_boxed(backend.call(node, 'clipboard-history'))
+        history = time_boxed(backend.call(node, 'clipboard-history', HISTORY))
     except Exception:
         history = {'status': 'unavailable', 'entries': []}
     if history.get('entries'):
@@ -140,11 +149,41 @@ def load():
         return dict(CLOSED)
 
 
+class changing:
+    """Read-modify-write of the state file, one process at a time (show's fetches, page, pick)."""
+    def __enter__(self):
+        self.fd = os.open(RUNTIME / 'clipdeck.lock', os.O_WRONLY | os.O_CREAT, 0o600)
+        fcntl.flock(self.fd, fcntl.LOCK_EX)
+        return load()
+
+    def __exit__(self, *exc):
+        os.close(self.fd)  # closing drops the lock
+
+
+def pages(state):
+    return max([1] + [-(-len(c['items']) // PER_COLUMN) for c in state.get('cols', [])])
+
+
+def page_of(col, page):
+    """The column's entries on that page, each with its key chip."""
+    shown = col['items'][page * PER_COLUMN:(page + 1) * PER_COLUMN]
+    return [dict(it, key=key) for key, it in zip(col['keys'], shown)]
+
+
 def for_eww(state):
     """Only what the overlay draws (no ids)."""
-    return {'open': state.get('open', False), 'cols': [
-        {k: c[k] for k in ('name', 'kind', 'state', 'note')} | {'items': [{k: it[k] for k in ('key', 'label', 'img')} for it in c['items']]}
-        for c in state.get('cols', [])]}
+    total = pages(state)
+    page = min(state.get('page', 0), total - 1)
+    cols = []
+    for c in state.get('cols', []):
+        shown, count = page_of(c, page), len(c['items'])
+        note = c['note']
+        if not note and not shown:
+            note = f'end of history · {count} entries'
+        span = f'{page * PER_COLUMN + 1}–{page * PER_COLUMN + len(shown)} / {count}' if shown and total > 1 else ''
+        cols.append({k: c[k] for k in ('name', 'kind', 'state')} | {
+            'note': note, 'span': span, 'items': [{k: it[k] for k in ('key', 'label', 'img')} for it in shown]})
+    return {'open': state.get('open', False), 'page': page + 1, 'pages': total, 'cols': cols}
 
 
 def cmd_stream():
@@ -203,9 +242,9 @@ def cmd_show():
         notify('clipdeck', 'This machine isn’t in ~/.config/archfleet/hosts.json (match "hostname" to its hostname).')
         return
     nodes = [local] + [n for n in NODES if n is not local]
-    state = {'open': True, 'cols': [column(n, i, n is local) for i, n in enumerate(nodes[:len(KEY_ROWS)])]}
+    state = {'open': True, 'page': 0, 'cols': [column(n, i, n is local) for i, n in enumerate(nodes[:len(KEY_ROWS)])]}
     try:
-        fill_history(state['cols'][0], cliphist_history(PER_COLUMN))
+        fill_history(state['cols'][0], cliphist_history(HISTORY))
     except Exception as error:
         offline(state['cols'][0], error)
     save(state)
@@ -229,18 +268,20 @@ def cmd_show():
 
     lock = threading.Lock()
 
-    def fetch(col, node):
+    def fetch(col, node, index):
         fetched = dict(col)
         try:
             fetch_column(fetched, node, backend)
         except Exception as error:
             offline(fetched, error)
-        with lock:
-            col.update(fetched)
-            if load().get('open'):  # closed meanwhile: don't bring the file back
-                save(state)
+        with lock, changing() as current:
+            # merge into what's on disk now: the page may have been flipped meanwhile
+            if current.get('open') and len(current.get('cols', [])) > index:  # closed: don't bring it back
+                current['cols'][index] = fetched
+                save(current)
 
-    threads = [threading.Thread(target=fetch, args=(col, node)) for col, node in zip(state['cols'][1:], nodes[1:])]
+    threads = [threading.Thread(target=fetch, args=(col, node, i))
+               for i, (col, node) in enumerate(zip(state['cols'][1:], nodes[1:]), 1)]
     for t in threads:
         t.start()
     for t in threads:
@@ -276,9 +317,21 @@ def fetch_bytes(alias, item):
     return raw, ('image/png' if raw.startswith(PNG_SIGNATURE) else None)  # else wl-copy works it out
 
 
+def cmd_page(direction):
+    with changing() as state:
+        if not state.get('open'):
+            return
+        last, page = pages(state) - 1, min(state.get('page', 0), pages(state) - 1)
+        page = {'next': page + 1, 'down': page + 1, 'prev': page - 1, 'up': page - 1,
+                'first': 0, 'last': last}.get(direction, page)
+        state['page'] = max(0, min(page, last))
+        save(state)
+
+
 def cmd_pick(key):
     state = load()
-    found = next(((c, it) for c in state.get('cols', []) for it in c['items'] if it['key'] == key.upper()), None)
+    page = min(state.get('page', 0), pages(state) - 1)
+    found = next(((c, it) for c in state.get('cols', []) for it in page_of(c, page) if it['key'] == key.upper()), None)
     if not found:
         return  # nothing (yet) under that key: stay open
     col, item = found
@@ -304,6 +357,8 @@ def main():
         cmd_hide()
     elif args[0] == 'pick' and len(args) == 2:
         cmd_pick(args[1])
+    elif args[0] == 'page' and len(args) == 2:
+        cmd_page(args[1].lower())
     elif args[0] == 'stream':
         cmd_stream()
     else:
