@@ -527,6 +527,25 @@ class VpnTests(unittest.TestCase):
         self.assertEqual(windows_vpn(dict(raw, tunnel='down'))['state'], 'down')
         self.assertIsNone(windows_vpn(None))
 
+    def test_helper_reads_npukit_status_and_formats_it(self):
+        import tempfile
+        from pathlib import Path
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / 'status.json'
+            self.assertIsNone(helper.npu_status(str(path)))
+            path.write_text('not json')
+            self.assertIsNone(helper.npu_status(str(path)))
+            path.write_text(json.dumps({'state': 'ready', 'components': ['chat', 'asr'], 'chat_model': 'qwen3.5:4b', 'extra': 1}))
+            npu = helper.npu_status(str(path))
+        self.assertNotIn('extra', npu)
+        line = app_module.npu_line(npu)
+        self.assertIn('#79e2c2', line)
+        self.assertIn('qwen3.5 4b+STT', line)
+        self.assertLessEqual(len(Text.from_markup(line).plain), 22)
+        self.assertIn('REC', app_module.npu_line({'state': 'ready', 'activity': 'rec', 'components': ['asr']}))
+        self.assertIn('idle', app_module.npu_line({'state': 'off', 'components': []}))
+        self.assertEqual(app_module.npu_line(None), '')
+
     def test_helper_reads_mullvad_and_validates_relays(self):
         import subprocess, tempfile
         from pathlib import Path

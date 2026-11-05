@@ -87,6 +87,19 @@ def last_upgrade(log=Path('/var/log/pacman.log')):
         return None
 
 
+def npu_status(path=None):
+    """NPU gateway state from npukit (github.com/Tjabooo/npukit): one small file read, None without it."""
+    path = Path(path or os.path.expanduser('~/.local/state/npukit/status.json'))
+    try:
+        data = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    keys = ('state', 'activity', 'components', 'chat_model', 'pmode', 'power', 'last_tps', 'updated')
+    return {key: data.get(key) for key in keys}
+
+
 def vpn_status(state_file=None):
     """The Mullvad app's state (None without one). state_file: optional JSON with "last_drop"
     (unix seconds), written by whatever watches the VPN on that machine; set in hosts.json."""
@@ -164,6 +177,7 @@ def status(options=None):
         'net_rx': max(0, net_after[0] - net_before[0]) / elapsed, 'net_tx': max(0, net_after[1] - net_before[1]) / elapsed,
         'last_upgrade': last_upgrade(), 'disks': [{'name': '/', 'used': disk.used, 'total': disk.total}],
         'vpn': vpn_status(options.get('vpn_state')),
+        'npu': npu_status(),
         **sensors(),
     }
 

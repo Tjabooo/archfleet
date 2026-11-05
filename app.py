@@ -219,6 +219,26 @@ def since(epoch, now=None):
     return f'{seconds / 86400:.0f} d ago'
 
 
+def npu_line(npu):
+    """One short line for the GPU card (fits its ~22 columns): a dot coloured by state, then what the
+    NPU (npukit) holds. '' when the machine has no npukit."""
+    if not npu:
+        return ''
+    state = npu.get('state') or '?'
+    if npu.get('activity'):
+        what = {'rec': 'REC', 'stt': 'speech', 'ocr': 'OCR', 'index': 'indexing'}.get(npu['activity'], npu['activity'])
+    else:
+        labels = {'asr': 'STT', 'embed': 'EMB'}
+        comps = npu.get('components') or []
+        parts = [(npu.get('chat_model') or '').replace(':', ' ')] if 'chat' in comps else []
+        what = '+'.join(parts + [labels[c] for c in comps if c in labels])
+    if state == 'off' and not npu.get('activity'):
+        return '[#596a85]NPU idle[/]'
+    color = ('#ed8796' if state == 'error' or npu.get('activity') == 'rec' else
+             '#79e2c2' if state == 'ready' and not npu.get('activity') else '#f5c26b')
+    return f"NPU [{color}]●[/] {what or state}"
+
+
 def vpn_short(vpn):
     """One fleet-table cell: 'on · Stockholm', 'off', 'BLOCKED', '—' (no VPN)."""
     if not vpn:
@@ -749,10 +769,12 @@ class Archfleet(App):
             if busy is None and gpu_temp is None and self.selected.get('marquee') and (self.sharing or {}).get('gpu'):
                 busy, gpu_temp = self.sharing['gpu'].get('busy'), self.sharing['gpu'].get('temp')  # read by Marquee (nvidia-smi)
             if busy is None and gpu_temp is None:
-                self.query_one('#gpu', Static).update('[b]GPU[/b]\n[#596a85]No readings[/]')
+                npu = npu_line(data.get('npu'))
+                self.query_one('#gpu', Static).update('[b]GPU[/b]\n[#596a85]No readings[/]' + (f'\n{npu}' if npu else ''))
             else:
                 line = '  ·  '.join(part for part in (None if busy is None else f'{busy}% busy', None if gpu_temp is None else celsius(gpu_temp)) if part)
-                self.query_one('#gpu', Static).update(f'[b]GPU[/b]\n{line}\n[#79e2c2]{meter(busy or 0)}[/]')
+                npu = npu_line(data.get('npu'))
+                self.query_one('#gpu', Static).update(f'[b]GPU[/b]\n{line}\n[#79e2c2]{meter(busy or 0)}[/]' + (f'\n{npu}' if npu else ''))
             used = 100 * data['memory_used'] / max(1, data['memory_total'])
             self.query_one('#memory', Static).update(f"[b]MEMORY[/b]\n{gib(data['memory_used'])} / {gib(data['memory_total'])}\n[#79e2c2]{meter(used)}[/]")
             disks = data.get('disks') or [{'name': 'C:' if self.selected['os'] != 'linux' else '/', 'used': data['disk_used'], 'total': data['disk_total']}]
