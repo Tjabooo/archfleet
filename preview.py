@@ -1,8 +1,17 @@
-"""Render the dashboard against your real machines into docs/ (SVG, plus PNG if rsvg-convert exists)."""
+"""Render the dashboard into docs/ (SVG, plus PNG if rsvg-convert exists).
+
+By default it reads your real machines. With --demo it uses the test fixtures (test_hosts.json and the
+fake backend), so the screenshots show no real hostnames or addresses.
+"""
 import asyncio
 import shutil
 import subprocess
+import sys
 from pathlib import Path
+
+DEMO = '--demo' in sys.argv
+if DEMO:
+    from test_app import FakeBackend  # points ARCHFLEET_HOSTS at test_hosts.json before app loads it
 from textual.widgets import TabbedContent
 from app import Archfleet
 
@@ -10,7 +19,7 @@ DOCS = Path(__file__).resolve().parent / 'docs'
 
 
 async def main():
-    app = Archfleet()
+    app = Archfleet(FakeBackend() if DEMO else None)
     async with app.run_test(size=(140, 44)) as pilot:
         await app.workers.wait_for_complete()
         await pilot.pause(1)
