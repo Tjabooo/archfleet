@@ -144,7 +144,14 @@ overlay. Each entry has a key chip (1–0, Q–P, A–L), and pressing the key o
 copies it to this machine. Each column shows 10 entries a page and holds up to 100 (set
 `CLIPDECK_HISTORY` to change that; Windows itself keeps 25): ←/→, Page Up/Down, Home/End or the
 scroll wheel flip every column together, and the same keys then pick from the page shown. Esc or any
-other key closes it. If your eww config defines its own `clipdeck` window, copy the updated widget from
+other key closes it.
+
+Each other machine's last answer is cached in `~/.cache/clipdeck/` (readable only by you). SUPER+V shows
+it straight away, marked "updating", while it asks the machine again, and keeps showing it, marked
+offline, when the machine is off or asleep. Text entries (up to 64 KiB each) still copy from that copy;
+images need the machine on. `CLIPDECK_CACHE=0` turns the cache off and `clipdeck forget` empties it.
+
+If your eww config defines its own `clipdeck` window, copy the updated widget from
 [clipdeck/eww/eww.yuck](clipdeck/eww/eww.yuck) to get the pager.
 
 The overlay is an eww window. clipdeck uses the first eww config of yours that defines a
@@ -183,7 +190,9 @@ On Windows the command is `%LOCALAPPDATA%\archfleet\archfleet-clipboard.cmd`. It
 - Clipboard data travels inside the SSH connection's input and output, so it never shows up in
   process lists, shell history or logs. Text and PNG images up to 8 MiB are supported. While
   clipdeck is open, what it shows is kept in `$XDG_RUNTIME_DIR/clipdeck.json` (RAM, your user only),
-  and the file is deleted on close.
+  and the file is deleted on close. The other machines' last history (text up to 64 KiB an entry) is
+  cached on disk in `~/.cache/clipdeck/` (folder 0700, files 0600), like cliphist's own database;
+  `CLIPDECK_CACHE=0` turns that off and `clipdeck forget` deletes it.
 - Everything runs as your own user. Without root, other users' processes show CPU and memory, but
   not their disk, GPU or network use. Per-process network counts TCP only (from `ss`). On Windows,
   the per-process I/O column includes network too, and processes there can't be ended from

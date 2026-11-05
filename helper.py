@@ -265,8 +265,12 @@ def dispatch(request):
         return read_wayland(env) if action == 'clipboard-get' else write_wayland(request.get('value') or {}, env)
     if action == 'clipboard-history':
         from clipboards import cliphist_history
-        limit = request.get('value')
-        return cliphist_history(max(1, min(limit, 1000)) if isinstance(limit, int) and not isinstance(limit, bool) else 10)
+        value = request.get('value')
+        # value: a limit (int), or {"limit": int, "text": bool} to get the full text of text entries too
+        options = value if isinstance(value, dict) else {'limit': value}
+        limit = options.get('limit')
+        limit = max(1, min(limit, 1000)) if isinstance(limit, int) and not isinstance(limit, bool) else 10
+        return cliphist_history(limit, with_text=options.get('text') is True)
     if action == 'clipboard-entry':
         from clipboards import cliphist_entry
         return cliphist_entry(request.get('value'))

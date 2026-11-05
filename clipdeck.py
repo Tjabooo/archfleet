@@ -5,6 +5,7 @@
   clipdeck page DIR    flip every column a page: next/prev (or down/up, eww's scroll), first, last
   clipdeck hide        close it
   clipdeck stream      JSON for the eww overlay (eww runs this itself)
+  clipdeck forget      delete the cached copies of the other machines' history
 
 One column per machine: this one's cliphist history first, then the other Linux machines' history
 and Windows clipboard history (with its current clipboard as a fallback). Other machines are reached
@@ -16,6 +17,10 @@ The overlay is an eww window called `clipdeck`: either in your own eww config (a
 ~/.config/*/eww or ~/.config/eww that defines it, so it wears your palette) or the one bundled in
 clipdeck/eww. Set CLIPDECK_EWW to pick a config folder yourself. What's on screen is kept in $XDG_RUNTIME_DIR (RAM, this user only)
 and deleted on close; clipboard contents never go on a command line.
+Each other machine's last answer is cached in ~/.cache/clipdeck/<alias>.json (this user only; text
+entries up to 64 KiB keep their full text). SUPER+V shows that copy at once while the machine is asked
+again, and keeps it, marked offline, when the machine doesn't answer: text still copies, images
+need the machine on. CLIPDECK_CACHE=0 turns the cache off; `clipdeck forget` empties it.
 """
 import base64
 import fcntl
@@ -56,6 +61,9 @@ try:
 except ValueError:
     HISTORY = 100
 CLOSED = {'open': False, 'page': 0, 'cols': []}
+CACHE = Path(os.environ.get('XDG_CACHE_HOME', Path.home() / '.cache')) / 'clipdeck'
+CACHING = os.environ.get('CLIPDECK_CACHE', '1') != '0'
+TEXT_CAP = 64 * 1024
 IMAGE = re.compile(r'^\[\[ binary data (.+?) (\w+) (\d+)x(\d+) \]\]$')
 
 
@@ -83,7 +91,7 @@ def node_title(node, local):
 
 def column(node, index, local=False):
     name, kind = node_title(node, local)
-    return {'alias': node['alias'], 'name': name, 'kind': kind, 'state': 'loading',
+    return {'alias': node['alias'], 'name': name, 'kind': kind, 'base_kind': kind, 'state': 'loading',
             'note': 'reaching ' + node['hostname'] + '…', 'items': [], 'keys': KEY_ROWS[index]}
 
 
@@ -92,7 +100,10 @@ def fill_history(col, entries):
     col['items'] = []
     for entry in entries[:HISTORY]:
         label, image = ('▣ Windows image', True) if entry.get('kind') == 'image' else describe(entry['preview'])
-        col['items'].append({'id': entry['id'], 'label': label, 'img': image})
+        item = {'id': entry['id'], 'label': label, 'img': image}
+        if isinstance(entry.get('text'), str):
+            item['text'] = entry['text']  # full text: copies without asking the machine again
+        col['items'].append(item)
     col['state'], col['note'] = ('ok', '') if col['items'] else ('empty', 'no clipboard history')
 
 
@@ -107,12 +118,14 @@ def fill_current(col, value):
         col['state'], col['note'] = 'empty', ('clipboard is empty' if kind in ('empty', 'text') else 'only formats it can’t copy')
         return
     col['items'] = [{'label': label, 'img': image}]
+    if not image and len(value['text'].encode()) <= TEXT_CAP:
+        col['items'][0]['text'] = value['text']
     col['state'], col['note'] = 'ok', ''
 
 
 def fetch_column(col, node, backend):
     if node['os'] == 'linux':
-        fill_history(col, time_boxed(backend.call(node, 'clipboard-history', HISTORY)))
+        fill_history(col, time_boxed(backend.call(node, 'clipboard-history', {'limit': HISTORY, 'text': True})))
         return
     try:
         history = time_boxed(backend.call(node, 'clipboard-history', HISTORY))
@@ -131,6 +144,59 @@ def offline(col, error):
     text = str(error)
     asleep = 'timed out' in text.lower() or 'no route' in text.lower() or type(error).__name__ == 'TimeoutError'
     col['state'], col['note'] = 'off', ('offline · asleep?' if asleep else text[:80] or 'unreachable')
+    if col.get('cached') and col['items']:
+        col['note'] = ('offline' if asleep else 'unreachable') + ' · showing its history from ' + ago(col['saved'])
+
+
+# ---------- the other machines' last answer, for when they're off ----------
+def ago(saved, now=None):
+    seconds = max(0, (now or time.time()) - saved)
+    if seconds < 90:
+        return 'just now'
+    if seconds < 90 * 60:
+        return f'{round(seconds / 60)} min ago'
+    if seconds < 36 * 3600:
+        return f'{round(seconds / 3600)} h ago'
+    return f'{round(seconds / 86400)} d ago'
+
+
+def cache_file(alias):
+    return CACHE / (re.sub(r'[^A-Za-z0-9._-]', '_', alias) + '.json')
+
+
+def store_cache(col):
+    if not CACHING or col['state'] not in ('ok', 'empty'):
+        return
+    try:
+        CACHE.mkdir(mode=0o700, parents=True, exist_ok=True)
+        path = cache_file(col['alias'])
+        tmp = path.with_suffix('.tmp')
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, 'w') as f:
+            json.dump({'saved': time.time(), 'col': {k: col[k] for k in ('kind', 'state', 'note', 'items')}}, f, ensure_ascii=False)
+        os.replace(tmp, path)
+    except OSError:
+        pass  # a cache that can't be written only means no offline copy
+
+
+def prefill(col):
+    """Show the machine's cached history while it's asked again."""
+    if not CACHING:
+        return
+    try:
+        cached = json.loads(cache_file(col['alias']).read_text())
+        saved, data = float(cached['saved']), cached['col']
+    except (OSError, ValueError, KeyError, TypeError):
+        return
+    if not data.get('items'):
+        return
+    col.update(kind=data.get('kind', col['kind']), items=data['items'], state='cached', cached=True, saved=saved,
+               note='updating · showing its history from ' + ago(saved))
+
+
+def cmd_forget():
+    for path in CACHE.glob('*.json'):
+        path.unlink(missing_ok=True)
 
 
 # ---------- state shared with `pick` and the eww stream ----------
@@ -243,6 +309,8 @@ def cmd_show():
         return
     nodes = [local] + [n for n in NODES if n is not local]
     state = {'open': True, 'page': 0, 'cols': [column(n, i, n is local) for i, n in enumerate(nodes[:len(KEY_ROWS)])]}
+    for col in state['cols'][1:]:
+        prefill(col)
     try:
         fill_history(state['cols'][0], cliphist_history(HISTORY))
     except Exception as error:
@@ -271,9 +339,12 @@ def cmd_show():
     def fetch(col, node, index):
         fetched = dict(col)
         try:
-            fetch_column(fetched, node, backend)
+            fresh = dict(col, kind=col['base_kind'], cached=False)
+            fetch_column(fresh, node, backend)
+            fetched = fresh
+            store_cache(fetched)
         except Exception as error:
-            offline(fetched, error)
+            offline(fetched, error)  # keeps the cached copy, if there is one
         with lock, changing() as current:
             # merge into what's on disk now: the page may have been flipped meanwhile
             if current.get('open') and len(current.get('cols', [])) > index:  # closed: don't bring it back
@@ -337,7 +408,15 @@ def cmd_pick(key):
     col, item = found
     cmd_hide()
     try:
-        data, mime = fetch_bytes(col['alias'], item)
+        if isinstance(item.get('text'), str):
+            data, mime = item['text'].encode('utf-8'), None  # already here: works with that machine off
+        elif col.get('cached'):
+            try:
+                data, mime = fetch_bytes(col['alias'], item)
+            except Exception:
+                raise RuntimeError(f"{col['name'].lower()} is off: only text entries copy from its saved history.")
+        else:
+            data, mime = fetch_bytes(col['alias'], item)
         # stderr to DEVNULL: wl-copy's background child would hold a pipe open forever
         subprocess.run(['wl-copy', *(['--type', mime] if mime else [])], input=data,
                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=6, check=True)
@@ -361,6 +440,8 @@ def main():
         cmd_page(args[1].lower())
     elif args[0] == 'stream':
         cmd_stream()
+    elif args[0] == 'forget':
+        cmd_forget()
     else:
         sys.exit('clipdeck: bad command (try `clipdeck help`)')
 

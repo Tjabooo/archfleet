@@ -614,7 +614,8 @@ class HelperTests(unittest.TestCase):
         clipdeck.fill_current(server, {'kind': 'empty'})
         self.assertEqual((server['state'], server['items']), ('empty', []))
         clipdeck.fill_current(server, {'kind': 'text', 'text': 'from\nwindows'})
-        self.assertEqual(clipdeck.page_of(server, 0), [{'key': 'A', 'label': 'from windows', 'img': False}])
+        self.assertEqual(clipdeck.page_of(server, 0), [{'key': 'A', 'label': 'from windows', 'img': False, 'text': 'from\nwindows'}])
+        self.assertNotIn('text', clipdeck.for_eww({'cols': [server]})['cols'][0]['items'][0])
         view = clipdeck.for_eww({'cols': [col, server]})
         self.assertNotIn('id', view['cols'][0]['items'][0])
         self.assertEqual((view['page'], view['pages'], view['cols'][0]['span']), (1, 2, '1–10 / 14'))
@@ -637,6 +638,51 @@ class HelperTests(unittest.TestCase):
                     patch.object(clipdeck.subprocess, 'run'):
                 clipdeck.cmd_pick('2')
             self.assertEqual(fetch.call_args.args[1]['id'], 11)
+
+    def test_clipdeck_cache_when_machine_is_off(self):
+        import clipdeck
+        with tempfile.TemporaryDirectory() as tmp, patch.object(clipdeck, 'CACHE', _Path(tmp) / 'cache'), \
+                patch.object(clipdeck, 'CACHING', True):
+            # a fresh answer is cached (with full text), and is shown at once next time
+            col = clipdeck.column(NODES[1], 1)
+            clipdeck.fill_history(col, [{'id': 7, 'preview': 'hello', 'text': 'hello\nworld'},
+                                        {'id': 6, 'preview': '[[ binary data 1 MiB png 20x20 ]]'}])
+            clipdeck.store_cache(col)
+            self.assertEqual(oct(clipdeck.cache_file(col['alias']).stat().st_mode & 0o777), '0o600')
+            again = clipdeck.column(NODES[1], 1)
+            clipdeck.prefill(again)
+            self.assertEqual((again['state'], again['cached'], len(again['items'])), ('cached', True, 2))
+            self.assertTrue(again['note'].startswith('updating'))
+            # the machine doesn't answer: the cached copy stays, marked offline
+            clipdeck.offline(again, TimeoutError())
+            self.assertEqual((again['state'], len(again['items'])), ('off', 2))
+            self.assertIn('offline · showing its history from just now', again['note'])
+            # text copies from the cache without the machine; an image says why it can't
+            with patch.object(clipdeck, 'load', return_value={'open': True, 'page': 0, 'cols': [again]}), \
+                    patch.object(clipdeck, 'cmd_hide'), patch.object(clipdeck, 'notify') as notify, \
+                    patch.object(clipdeck, 'fetch_bytes', side_effect=TimeoutError()), \
+                    patch.object(clipdeck.subprocess, 'run') as run:
+                clipdeck.cmd_pick('Q')
+                self.assertEqual(run.call_args.kwargs['input'], 'hello\nworld'.encode())
+                clipdeck.cmd_pick('W')
+                self.assertIn('only text entries', notify.call_args.args[1])
+            # failed answers never overwrite the cache; forget empties it
+            clipdeck.store_cache(again)
+            self.assertEqual(json.loads(clipdeck.cache_file(col['alias']).read_text())['col']['state'], 'ok')
+            clipdeck.cmd_forget()
+            self.assertFalse(clipdeck.cache_file(col['alias']).exists())
+        self.assertEqual(clipdeck.ago(0, 3 * 3600), '3 h ago')
+
+    def test_cliphist_history_with_text(self):
+        import subprocess
+        import clipboards
+        def run(cmd, **kw):
+            if cmd[1] == 'list':
+                return subprocess.CompletedProcess(cmd, 0, b'3\tshort\n2\t[[ binary data 1 KiB png 2x2 ]]\n1\tbad\n', b'')
+            return subprocess.CompletedProcess(cmd, 0, {'3': 'short text'.encode(), '1': b'\xff\xfe'}[cmd[2]], b'')
+        with patch.object(clipboards.subprocess, 'run', side_effect=run):
+            entries = clipboards.cliphist_history(10, with_text=True)
+        self.assertEqual([e.get('text') for e in entries], ['short text', None, None])
 
     def test_windows_history_and_current_fallback(self):
         import clipdeck

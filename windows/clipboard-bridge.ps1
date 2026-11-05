@@ -45,6 +45,7 @@ function Get-DesktopHistory {
         }
         $taskItems = @(Read-HistoryItems)
         $taskEntries = @()
+        $taskTextBudget = 2097152
         foreach ($taskItem in $taskItems) {
             if ($taskEntries.Count -ge 25) { break }  # Windows itself keeps at most 25
             try {
@@ -54,7 +55,14 @@ function Get-DesktopHistory {
                 } elseif ($taskContent.Contains('Text')) {
                     $taskText = Wait-ClipboardOperation ($taskContent.GetTextAsync()) ([string])
                     if ($taskUtf8.GetByteCount($taskText) -gt $taskLimit) { continue }
-                    $taskEntries += @{ id=$taskItem.Id; preview=$taskText.Substring(0, [Math]::Min(600, $taskText.Length)); kind='text' }
+                    $taskEntry = @{ id=$taskItem.Id; preview=$taskText.Substring(0, [Math]::Min(600, $taskText.Length)); kind='text' }
+                    # full text too (64 KiB each, 2 MiB in all) so Linux machines can cache it for when this PC is off
+                    $taskTextBytes = $taskUtf8.GetByteCount($taskText)
+                    if ($taskTextBytes -le 65536 -and $taskTextBytes -le $taskTextBudget) {
+                        $taskEntry.text = $taskText
+                        $taskTextBudget -= $taskTextBytes
+                    }
+                    $taskEntries += $taskEntry
                 }
             } catch {
                 # A removed or unreadable item must not hide the other entries or leak its contents.

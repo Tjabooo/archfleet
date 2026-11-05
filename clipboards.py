@@ -65,8 +65,13 @@ def read_wayland(env):
     return from_bytes(result.stdout, 'image/png' if mime == 'image/png' else 'text/plain')
 
 
-def cliphist_history(limit=10):
-    """The newest cliphist entries, [{'id', 'preview'}]. cliphist keeps history; Wayland only the current one."""
+TEXT_CAP = 64 * 1024        # full text sent along with a history entry (clipdeck caches it)
+TEXT_BUDGET = 2 * 1024 * 1024  # ... for the whole list
+
+
+def cliphist_history(limit=10, with_text=False):
+    """The newest cliphist entries, [{'id', 'preview'}]. cliphist keeps history; Wayland only the current one.
+    with_text: text entries (valid UTF-8, up to TEXT_CAP, TEXT_BUDGET in all) also carry their full 'text'."""
     result = subprocess.run(['cliphist', 'list'], capture_output=True, timeout=6)
     if result.returncode:
         raise RuntimeError(result.stderr.decode(errors='replace').strip() or 'Could not read the clipboard history.')
@@ -77,6 +82,19 @@ def cliphist_history(limit=10):
             entries.append({'id': int(entry_id), 'preview': preview})
             if len(entries) >= limit:
                 break
+    if with_text:
+        budget = TEXT_BUDGET
+        for entry in entries:
+            if entry['preview'].startswith('[[ binary data') or budget <= 0:
+                continue
+            r = subprocess.run(['cliphist', 'decode', str(entry['id'])], capture_output=True, timeout=6)
+            if r.returncode or len(r.stdout) > min(TEXT_CAP, budget) or r.stdout.startswith(PNG_SIGNATURE):
+                continue
+            try:
+                entry['text'] = r.stdout.decode('utf-8')
+            except UnicodeDecodeError:
+                continue
+            budget -= len(r.stdout)
     return entries
 
 
