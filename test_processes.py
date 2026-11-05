@@ -13,7 +13,7 @@ from test_app import FakeBackend
 
 
 def proc(pid, name, cpu, own=True, **extra):
-    base = {'pid': pid, 'name': name, 'user': 'tjabo' if own else 'root', 'own': own, 'start': 1000 + pid, 'cpu': cpu,
+    base = {'pid': pid, 'name': name, 'user': 'me' if own else 'root', 'own': own, 'start': 1000 + pid, 'cpu': cpu,
             'memory': 300 * 1024**2, 'gpu': 0.0 if own else None, 'vram': 0 if own else None,
             'disk_read': 0 if own else None, 'disk_write': 0 if own else None,
             'net_rx': 0 if own else None, 'net_tx': 0 if own else None, 'threads': 4, 'command': '/usr/bin/' + name}
@@ -30,7 +30,7 @@ SAMPLE = {
         proc(10, 'firefox', 4.5, gpu=12.0, net_rx=1_000_000, net_tx=20_000, vram=600 * 1024**2),
         proc(20, 'kitty', 0.4, disk_write=5000),
         proc(1, 'systemd', 0.1, own=False),
-        proc(30, 'cs2', 12.0, gpu=55.0, command='/home/tjabo/.steam/cs2 -novid'),
+        proc(30, 'cs2', 12.0, gpu=55.0, command='/home/me/.steam/cs2 -novid'),
     ],
 }
 
@@ -158,7 +158,7 @@ class ProcessViewTests(unittest.IsolatedAsyncioTestCase):
             await app.workers.wait_for_complete()
             await pilot.pause()
             self.assertEqual(app.query_one('#proc-table', DataTable).row_count, 0)
-            self.assertIn("Can't read processes on geofront", str(app.query_one('#proc-status').render()))
+            self.assertIn("Can't read processes on my-server", str(app.query_one('#proc-status').render()))
 
     async def test_windows_script_travels_on_stdin(self):
         payload = json.dumps(dict(SAMPLE, platform='windows'))

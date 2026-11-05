@@ -27,7 +27,7 @@ def test_png():
     return b'\x89PNG\r\n\x1a\n' + chunk(b'IHDR', struct.pack('>IIBBBBB', 2, 1, 8, 6, 0, 0, 0)) + chunk(b'IDAT', zlib.compress(b'\x00\xff\x00\x00\xff\x00\xff\x00\xff')) + chunk(b'IEND', b'')
 
 
-def screentime_sample(host='magi'):
+def screentime_sample(host='my-desktop'):
     hourly = [{'hour': h, 'seconds': 1800 if h in (9, 10) else 0, 'categories': {'Development': 1200, 'Web': 600} if h in (9, 10) else {}} for h in range(24)]
     return {'device': host, 'date': '2026-11-04', 'total': 3600, 'hourly': hourly, 'pickups': 4, 'first_pickup': '08:55',
             'apps': [{'app': 'kitty', 'name': 'Kitty', 'category': 'Development', 'seconds': 2400},
@@ -49,7 +49,7 @@ class FakeBackend:
         return node['alias'] == 'arch-desktop'
 
     async def status(self, node):
-        return {'online': True, 'hostname': node['hostname'], 'cpu': 12.5, 'memory_used': 4 * 1024**3, 'memory_total': 16 * 1024**3, 'disk_used': 50 * 1024**3, 'disk_total': 250 * 1024**3, 'uptime': 7400, 'kernel': 'test-kernel', 'elapsed_ms': 5, 'battery': []}
+        return {'online': True, 'hostname': node['hostname'], 'cpu': 12.5, 'memory_used': 4 * 1024**3, 'memory_total': 16 * 1024**3, 'disk_used': 50 * 1024**3, 'disk_total': 250 * 1024**3, 'uptime': 7400, 'kernel': '6.17.7-arch1-1', 'elapsed_ms': 5, 'battery': []}
 
     async def call(self, node, action='status', value=None):
         self.calls.append((node['alias'], action, value))
@@ -231,8 +231,8 @@ class AppTests(unittest.IsolatedAsyncioTestCase):
             self.assertIsNone(marquee_config(agent, server))
             server.write_text('PORT=9000\nHOUSE_TOKEN="abc"\n')
             self.assertEqual(marquee_config(agent, server), ('http://127.0.0.1:9000', 'abc'))
-            agent.write_text('# marquee-house\nMARQUEE_URL=http://192.168.50.67:8080/\nHOUSE_TOKEN=xyz\n')
-            self.assertEqual(marquee_config(agent, server), ('http://192.168.50.67:8080', 'xyz'))
+            agent.write_text('# marquee-house\nMARQUEE_URL=http://192.168.1.10:8080/\nHOUSE_TOKEN=xyz\n')
+            self.assertEqual(marquee_config(agent, server), ('http://192.168.1.10:8080', 'xyz'))
 
     async def test_run_on_fleet_defaults_to_arch_machines(self):
         backend = FakeBackend()
@@ -250,7 +250,7 @@ class AppTests(unittest.IsolatedAsyncioTestCase):
             ran = sorted(alias for alias, action, value in backend.calls if action == 'run')
             self.assertEqual(ran, ['arch-desktop', 'arch-laptop'])
             text = '\n'.join(line.text for line in app.query_one('#run-output', RichLog).lines)
-            self.assertIn('ran uname on unit-01', text)
+            self.assertIn('ran uname on my-laptop', text)
             field.value = ''
             await pilot.press('up')
             self.assertEqual(field.value, 'uname')
@@ -266,7 +266,7 @@ class AppTests(unittest.IsolatedAsyncioTestCase):
             await app.workers.wait_for_complete()
             await pilot.pause()
             text = '\n'.join(line.text for line in app.query_one('#report', RichLog).lines)
-            self.assertIn('Only on magi (1)', text)
+            self.assertIn('Only on my-desktop (1)', text)
             self.assertIn('tlp', text)
             await pilot.click('#news')
             await app.workers.wait_for_complete()
@@ -290,7 +290,7 @@ class AppTests(unittest.IsolatedAsyncioTestCase):
             await pilot.press(*'hej')
             await pilot.press('enter')
             await app.workers.wait_for_complete()
-            self.assertIn(('arch-desktop', 'notify', {'text': 'hej', 'from': 'magi'}), backend.calls)
+            self.assertIn(('arch-desktop', 'notify', {'text': 'hej', 'from': 'my-desktop'}), backend.calls)
             self.assertFalse(any(action == 'lock' for _, action, _ in backend.calls))
             await pilot.press('3')
             self.assertTrue(app.query_one('#peek', Button).disabled)
@@ -505,7 +505,7 @@ class VpnTests(unittest.TestCase):
         self.assertEqual(since(1000, now=1040), '40 s ago')
         self.assertEqual(since(0), '—')
         self.assertEqual(since(1000, now=1000 + 3 * 3600), '3 h ago')
-        text = vpn_lines('geofront', {'kind': 'tunnel', 'state': 'connected', 'relay': 'r1', 'exit_ip': '203.0.113.9', 'city': 'Stockholm',
+        text = vpn_lines('my-server', {'kind': 'tunnel', 'state': 'connected', 'relay': 'r1', 'exit_ip': '203.0.113.9', 'city': 'Stockholm',
                                       'lockdown': None, 'last_drop': 100, 'last_leak': 50, 'problems': []}, now=160)
         self.assertIn('torrent split tunnel', text)
         self.assertIn('last drop 60 s ago', text)
@@ -751,9 +751,9 @@ class HelperTests(unittest.TestCase):
         self.assertNotIn('private fixture preview', str(notify.call_args))
 
     def test_wake_news_upgrade_and_config_helpers(self):
-        packet = magic_packet('30:c5:99:a8:69:23')
+        packet = magic_packet('02:00:5e:10:20:30')
         self.assertEqual(len(packet), 102)
-        self.assertEqual(packet[6:12], bytes.fromhex('30c599a86923'))
+        self.assertEqual(packet[6:12], bytes.fromhex('02005e102030'))
         with self.assertRaises(ValueError):
             magic_packet(None)
         news = parse_news('''<rss><channel>
@@ -776,7 +776,7 @@ class HelperTests(unittest.TestCase):
             self.assertEqual(load_nodes(config), [])
             config.write_text(json.dumps([{'alias': 'a', 'mac': 'aa:bb:cc:dd:ee:ff'}]))
             self.assertEqual(load_nodes(config), [{'alias': 'a', 'mac': 'aa:bb:cc:dd:ee:ff', 'label': 'a', 'hostname': 'a', 'os': 'linux', 'user': '', 'address': ''}])
-            self.assertEqual(lan_label(NODES), '192.168.50.0/24')
+            self.assertEqual(lan_label(NODES), '192.168.1.0/24')
             self.assertEqual(lan_label([{'address': '10.0.0.2'}, {'address': '10.0.1.2'}]), 'LAN')
 
     def test_session_inputs_are_validated_before_execution(self):
