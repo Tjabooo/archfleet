@@ -545,6 +545,9 @@ class VpnTests(unittest.TestCase):
         self.assertIn('REC', app_module.npu_line({'state': 'ready', 'activity': 'rec', 'components': ['asr']}))
         self.assertIn('idle', app_module.npu_line({'state': 'off', 'components': []}))
         self.assertEqual(app_module.npu_line(None), '')
+        gpu = {'state': 'ready', 'components': ['chat'], 'chat_model': 'qwen3.5:9b', 'runs_on': 'GPU'}
+        self.assertTrue(Text.from_markup(app_module.npu_line(gpu)).plain.startswith('GPU '))
+        self.assertIn('GPU idle', app_module.npu_line({'state': 'off', 'runs_on': 'GPU'}))
 
     def test_helper_reads_mullvad_and_validates_relays(self):
         import subprocess, tempfile

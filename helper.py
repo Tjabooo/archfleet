@@ -96,7 +96,7 @@ def npu_status(path=None):
         return None
     if not isinstance(data, dict):
         return None
-    keys = ('state', 'activity', 'components', 'chat_model', 'pmode', 'power', 'last_tps', 'updated')
+    keys = ('state', 'activity', 'components', 'chat_model', 'pmode', 'power', 'last_tps', 'updated', 'runs_on')
     return {key: data.get(key) for key in keys}
 
 

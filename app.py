@@ -224,6 +224,7 @@ def npu_line(npu):
     NPU (npukit) holds. '' when the machine has no npukit."""
     if not npu:
         return ''
+    where = npu.get('runs_on') or 'NPU'  # npukit's GPU backend (llama.cpp) reports 'GPU'
     state = npu.get('state') or '?'
     if npu.get('activity'):
         what = {'rec': 'REC', 'stt': 'speech', 'ocr': 'OCR', 'index': 'indexing'}.get(npu['activity'], npu['activity'])
@@ -233,10 +234,10 @@ def npu_line(npu):
         parts = [(npu.get('chat_model') or '').replace(':', ' ')] if 'chat' in comps else []
         what = '+'.join(parts + [labels[c] for c in comps if c in labels])
     if state == 'off' and not npu.get('activity'):
-        return '[#596a85]NPU idle[/]'
+        return f'[#596a85]{where} idle[/]'
     color = ('#ed8796' if state == 'error' or npu.get('activity') == 'rec' else
              '#79e2c2' if state == 'ready' and not npu.get('activity') else '#f5c26b')
-    return f"NPU [{color}]●[/] {what or state}"
+    return f"{where} [{color}]●[/] {what or state}"
 
 
 def vpn_short(vpn):
