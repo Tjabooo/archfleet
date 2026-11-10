@@ -33,13 +33,14 @@ history, paged so you can reach far back.
 
 ## Requirements
 
-- Python 3.10+ and OpenSSH on each machine. Textual is installed into Archfleet's own venv.
+- OpenSSH on each machine. `install.sh` builds Archfleet with Rust (`cargo`), or downloads the
+  latest release binary when Rust isn't installed. Nothing else: no Python, no runtime.
 - Linux machines: `sshd` running. For the clipboard you also need `wl-clipboard` and `cliphist`. The
   Session tab needs Hyprland, `grim` and `notify-send`.
 - clipdeck needs [eww](https://github.com/elkowar/eww) and Hyprland.
 - Windows (optional): Windows 10/11 with OpenSSH Server (the setup script installs it).
 
-Arch: `sudo pacman -S --needed python openssh wl-clipboard cliphist grim libnotify` and eww from the AUR.
+Arch: `sudo pacman -S --needed rust openssh wl-clipboard cliphist grim libnotify` and eww from the AUR.
 
 ## Install
 
@@ -51,9 +52,10 @@ cd archfleet
 ./install.sh
 ```
 
-This copies the app to `~/.local/share/archfleet`, builds its venv, adds `archfleet`,
-`archfleet-clipboard` and `clipdeck` to `~/.local/bin`, adds an app-launcher entry, and creates
-`~/.config/archfleet/hosts.json` the first time. Run it again to update.
+This builds one `archfleet` binary into `~/.local/share/archfleet`, links `archfleet`,
+`archfleet-clipboard` and `clipdeck` to it in `~/.local/bin`, adds an app-launcher entry, and creates
+`~/.config/archfleet/hosts.json` the first time. Run it again (after `git pull`) to update. It also
+removes what an older Python version of Archfleet left there.
 
 ### 1. List your machines
 
@@ -75,7 +77,7 @@ the same file on every machine:
 | `label`, `address`, `user` | Shown in the UI. `address` is also used for the SSH aliases below. |
 | `os` | `linux` or `windows` |
 | `mac` | Optional: the wired MAC address, which enables Wake-on-LAN |
-| `helper`, `clipboard_client` | Optional: non-default paths of the Linux helper / Windows clipboard client |
+| `helper`, `clipboard_client` | Optional: where archfleet is on that Linux machine (default `~/.local/share/archfleet/archfleet`) / the Windows clipboard client |
 | `screentime_command` | Optional: how to run `screentime today --json` there (default: from `~/.local/bin` or `PATH`) |
 | `marquee` | Optional: `true` on the machine running [Marquee](https://github.com/Tjabooo/marquee), to show its sharing load |
 | `vpn` | Optional, see below |
@@ -102,9 +104,9 @@ Keys 1–9 select machines in the order listed.
 If `ssh <alias>` already works without a password, skip this step. Otherwise run this on each machine:
 
 ```sh
-python3 ~/.local/share/archfleet/setup_ssh.py          # aliases + a dedicated key, then prints what to authorise
-python3 ~/.local/share/archfleet/setup_ssh.py --copy   # same, and runs ssh-copy-id for the Linux machines
-python3 ~/.local/share/archfleet/setup_ssh.py --check  # once all are done: ssh + sftp round trip to each
+archfleet setup-ssh           # aliases + a dedicated key, then prints what to authorise
+archfleet setup-ssh --copy    # same, and runs ssh-copy-id for the Linux machines
+archfleet setup-ssh --check   # once all are done: ssh + sftp round trip to each
 ```
 
 The aliases go in `~/.ssh/config.d/archfleet.conf`, which is included from the top of
@@ -124,7 +126,7 @@ This installs OpenSSH Server and allows key-only logins for your account. Port 2
 your LAN (the PC's own /24 by default; change it with `-AllowFrom 10.0.0.0/24`), on the Private
 network profile. The script refuses to replace an `sshd_config` it didn't write.
 
-Then, as yourself (not elevated), install the clipboard bridge:
+Then, as yourself (not elevated), install the clipboard bridge and `archfleet.exe`:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File windows\install.ps1
@@ -162,8 +164,25 @@ uses the bundled one in [clipdeck/eww](clipdeck/eww). To pick a config yourself,
 
 Run `archfleet` or open **Archfleet** from your launcher.
 
-Keys: 1–9 machines, P processes, O change process sort, C clipboard, W wake, R refresh, S SSH,
-F SFTP, Q quit. Tab/Shift-Tab or the mouse for everything else.
+Everything works with the keyboard or the mouse. Every button shows its key.
+
+| Keys | Everywhere |
+| --- | --- |
+| `1`–`9` | select a machine |
+| `←` `→` (or Tab) | previous / next tab |
+| `r` `s` `f` `w` | refresh, SSH shell, SFTP, Wake-on-LAN |
+| `p` `c` | Processes, Clipboard |
+| `↑` `↓` `PgUp` `PgDn` `⏎` | move in the tab's list (or scroll it), pick |
+| `Esc` | leave a text field or dialog |
+| `q` | quit |
+
+On a tab: Overview `t` tmux, `l` link test · Processes `/` filter, `m` only mine, `o`/`O` sort
+column/order, `e` end · Session `k` peek, `l` lock, `n` notify, `u` open URL, `g` workspace,
+`R` reload, `t` switch table · VPN `o` connect, `x` disconnect, `e` reconnect, `l` relay,
+`R`/`t` restart/test tunnel · Files `i` edit paths, `u` upload, `d` download · Clipboard `a`
+refresh all, `h` copy here, `l` send local here, `v` view image · Run: type, `⏎` runs, `Alt+1…9`
+tick machines · Maintenance `u` updates, `n` news (click an item to open it), `U` upgrade, `v` `j`
+`d` `l` diagnostics, `k` compare packages.
 
 From a shell, on Linux or Windows:
 
@@ -175,18 +194,25 @@ wl-paste | archfleet-clipboard set laptop   # content on stdin, never as an argu
 archfleet --wake desktop                    # Wake-on-LAN magic packet
 ```
 
-On Windows the command is `%LOCALAPPDATA%\archfleet\archfleet-clipboard.cmd`. It reads the same
-`~/.config/archfleet/hosts.json`.
+On Windows the command is `%LOCALAPPDATA%\archfleet\archfleet-clipboard.cmd` (it runs
+`archfleet.exe clipboard`). It reads the same `~/.config/archfleet/hosts.json`.
 
 ![Maintenance](docs/maintenance.png)
 
 ## How it works
 
-- `backend.py` talks to each machine. On Linux it sends a JSON request to `helper.py` over
-  `ssh <alias> python3 ~/.local/share/archfleet/helper.py --stdin` (or runs it directly on this
-  machine). On Windows it sends PowerShell scripts over SSH.
-- Status is read every 15 seconds, the VPN state with it (`mullvad status --json` on Linux). Processes are read every 3 seconds, only while their tab is
-  open. Session info is read only when you open that tab or press Refresh.
+- One Rust binary does everything: the dashboard (ratatui), the per-machine helper, clipdeck and the
+  clipboard command (by the name it's started as, or `archfleet helper|clipdeck|clipboard`).
+- On Linux the dashboard sends a JSON request over `ssh <alias> ~/.local/share/archfleet/archfleet
+  helper --stdin` and reads one JSON answer; for this machine it calls the same code in-process. On
+  Windows it sends the PowerShell in [windows/](windows) over SSH.
+- Status is read every 15 seconds, the VPN state with it (`mullvad status --json` on Linux). Processes
+  are read every 3 seconds, only while their tab is open. Session info is read only when you open that
+  tab or press Refresh. CPU, network and per-process rates come from the difference to the previous
+  reading, which the helper keeps in `$XDG_RUNTIME_DIR`, so a read answers at once instead of sampling
+  (only the first read after a pause waits a moment to measure).
+- The dashboard only redraws when something changed and does its SSH work on background threads.
+  clipdeck's eww stream waits on inotify instead of polling.
 - Clipboard data travels inside the SSH connection's input and output, so it never shows up in
   process lists, shell history or logs. Text and PNG images up to 8 MiB are supported. While
   clipdeck is open, what it shows is kept in `$XDG_RUNTIME_DIR/clipdeck.json` (RAM, your user only),
@@ -206,12 +232,14 @@ On Windows the command is `%LOCALAPPDATA%\archfleet\archfleet-clipboard.cmd`. It
 ## Development
 
 ```sh
-~/.local/share/archfleet/venv/bin/python -m unittest test_app.py test_processes.py
+cargo test                     # unit tests, no network needed
+cargo clippy -- -D warnings
+cargo build --release          # target/release/archfleet
+archfleet check                # read-only check against your real machines
 ```
 
-The tests use a fake backend and `test_hosts.json`, so they don't need a network.
-`live_check.py`, `clipboard_check.py` and `transfer_check.py` are read-only checks against your real
-machines. `preview.py` renders the screenshots in `docs/`.
+Releases attach prebuilt Linux (x86_64, aarch64) and Windows binaries, which the installers download
+when Rust isn't installed.
 
 ## License
 

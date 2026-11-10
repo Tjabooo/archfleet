@@ -1,5 +1,0 @@
-[
-  {"alias":"arch-desktop","label":"Desktop","hostname":"magi","address":"192.168.50.26","user":"tjabo","os":"linux","mac":"02:00:00:00:00:01","vpn":{"state_file":"~/.local/state/example/vpn.json"}},
-  {"alias":"arch-laptop","label":"Laptop","hostname":"unit-01","address":"192.168.50.130","user":"tjabo","os":"linux"},
-  {"alias":"home-server","label":"Home server","hostname":"geofront","address":"192.168.50.67","user":"mediaserver","os":"windows","mac":"02:00:00:00:00:02","marquee":true,"vpn":{"status_file":"C:/ProgramData/VpnStatus/status.json","restart":"Restart-Service 'WireGuardTunnel$example'","test":"& 'C:/vpn/Test-Vpn.ps1'"}}
-]

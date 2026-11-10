@@ -1,5 +1,5 @@
 # Archfleet on Windows: lets your Linux machines read and set this PC's clipboard (including
-# Windows clipboard history) over SSH, and adds the archfleet-clipboard command here.
+# Windows clipboard history) over SSH, and adds archfleet.exe and the archfleet-clipboard command here.
 #
 #   powershell -ExecutionPolicy Bypass -File windows\install.ps1
 #
@@ -39,24 +39,29 @@ Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Pr
 Start-ScheduledTask -TaskName $taskName
 Write-Output "Clipboard bridge: task '$taskName' for $user runs $script"
 
-# archfleet-clipboard here needs Python 3 (standard library only).
-$python = (Get-Command py -ErrorAction SilentlyContinue).Source
-$pyArgs = '-3 '
-if (-not $python) { $python = (Get-Command python -ErrorAction SilentlyContinue).Source; $pyArgs = '' }
-# Python install manager's own folder, which isn't always on PATH in SSH sessions
-$managed = Join-Path $env:LOCALAPPDATA 'Python\bin\python.exe'
-if ((-not $python -or $python -match 'WindowsApps') -and (Test-Path $managed)) { $python = $managed; $pyArgs = '' }
-if ($python -and $python -notmatch 'WindowsApps') {
+# archfleet.exe gives this PC the archfleet-clipboard command (and the dashboard): a local
+# `cargo build --release` if there is one, else the latest release.
+$exe = Join-Path $dest 'archfleet.exe'
+$built = Join-Path $repo 'target\release\archfleet.exe'
+if (Test-Path -LiteralPath $built) {
+    Copy-Item -LiteralPath $built -Destination $exe -Force
+} else {
+    try {
+        $url = 'https://github.com/Tjabooo/archfleet/releases/latest/download/archfleet-windows-x86_64.exe'
+        Invoke-WebRequest -UseBasicParsing -Uri $url -OutFile "$exe.new"
+        Move-Item -LiteralPath "$exe.new" -Destination $exe -Force
+    } catch {
+        Write-Output "Couldn't download archfleet.exe ($($_.Exception.Message)); the bridge works without it."
+    }
+}
+if (Test-Path -LiteralPath $exe) {
     $cmd = Join-Path $dest 'archfleet-clipboard.cmd'
     Set-Content -LiteralPath $cmd -Encoding ASCII -Value @"
 @echo off
 rem archfleet-clipboard get <alias> | set <alias> (stdin) | copy <from> <to>
-set PYTHONUTF8=1
-"$python" $pyArgs"$repo\clipboard_cli.py" %*
+"$exe" clipboard %*
 "@
     Write-Output "Clipboard command: $cmd (add $dest to PATH to type just archfleet-clipboard)"
-} else {
-    Write-Output 'Python 3 not found: skipped the archfleet-clipboard command (the bridge works without it).'
 }
 Write-Output ''
 Write-Output 'Turn on clipboard history (Settings > System > Clipboard) so SUPER+V on Linux can show it.'
