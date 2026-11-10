@@ -6,8 +6,8 @@ other machines, no open ports and no background services.
 
 ![Overview](docs/overview.png)
 
-- **Overview**: CPU (with temperature), GPU busy and temperature, memory, every drive, network rate,
-  uptime, battery, last full upgrade, CPU history, the status of the whole fleet, and an SSH link
+- **Overview**: CPU (with temperature), GPU busy and temperature (plus the NPU's state on machines
+  running [npukit](https://github.com/Tjabooo/npukit)), memory, every drive, network rate, uptime, battery, last full upgrade, CPU history, the status of the whole fleet, and an SSH link
   speed test.
 - **Screen Time** (Overview, Arch machines): today's total, pickups, hourly bars and most used apps from
   [screentime](https://github.com/Tjabooo/screentime) (`screentime today --json` over SSH, every minute).
@@ -185,8 +185,8 @@ On Windows the command is `%LOCALAPPDATA%\archfleet\archfleet-clipboard.cmd`. It
 - `backend.py` talks to each machine. On Linux it sends a JSON request to `helper.py` over
   `ssh <alias> python3 ~/.local/share/archfleet/helper.py --stdin` (or runs it directly on this
   machine). On Windows it sends PowerShell scripts over SSH.
-- Status is read every 15 seconds, the VPN state with it (`mullvad status --json` on Linux). Processes are read every 3 seconds, only while their tab is
-  open. Session info is read only when you open that tab or press Refresh.
+- Status is read every 15 seconds, the VPN state with it (`mullvad status --json` on Linux).
+  Processes are read every 3 seconds, only while their tab is open. Session info is read only when you open that tab or press Refresh.
 - Clipboard data travels inside the SSH connection's input and output, so it never shows up in
   process lists, shell history or logs. Text and PNG images up to 8 MiB are supported. While
   clipdeck is open, what it shows is kept in `$XDG_RUNTIME_DIR/clipdeck.json` (RAM, your user only),
@@ -206,13 +206,16 @@ On Windows the command is `%LOCALAPPDATA%\archfleet\archfleet-clipboard.cmd`. It
 ## Development
 
 ```sh
-~/.local/share/archfleet/venv/bin/python -m unittest test_app.py test_processes.py
+cd ~/.local/share/archfleet   # install.sh copies the tests there too
+venv/bin/python -m unittest test_app.py test_processes.py
 ```
 
 The tests use a fake backend and `test_hosts.json`, so they don't need a network.
-`live_check.py`, `clipboard_check.py` and `transfer_check.py` are read-only checks against your real
-machines. `preview.py` renders the screenshots in `docs/`.
+`live_check.py` and `clipboard_check.py` only read from your real machines (`clipboard_check.py
+--roundtrip` briefly writes test content and restores it); `transfer_check.py` copies a small
+temporary file to each machine and removes it again. `preview.py` renders the screenshots in `docs/`;
+`preview.py --demo` renders them from the test fixtures instead of your machines.
 
 ## License
 
-MIT
+MIT, see [LICENSE](LICENSE).
