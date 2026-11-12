@@ -385,10 +385,10 @@ fn overview(buf: &mut Buffer, hits: &mut Hits, app: &mut App, area: Rect) -> u16
         let (mut busy, mut gpu_temp) = (jf(&data, "gpu_busy"), jf(&data, "gpu_temp"));
         if busy.is_none()
             && gpu_temp.is_none()
-            && node.marquee
+            && node.lilin
             && let Some(gpu) = app.sharing.as_ref().map(|s| &s["gpu"]).filter(|g| util::truthy(g))
         {
-            (busy, gpu_temp) = (jf(gpu, "busy"), jf(gpu, "temp")); // read by Marquee (nvidia-smi)
+            (busy, gpu_temp) = (jf(gpu, "busy"), jf(gpu, "temp")); // read by Lilin (nvidia-smi)
         }
         let npu = npu_line(&data["npu"]);
         let gpu = if busy.is_none() && gpu_temp.is_none() {
@@ -503,7 +503,7 @@ fn overview(buf: &mut Buffer, hits: &mut Hits, app: &mut App, area: Rect) -> u16
     put(buf, flow.x, flow.take(1).y, flow.width, &Line::styled(speed_text, Style::new().fg(speed_color)));
     flow.gap(1);
 
-    if node.marquee {
+    if node.lilin {
         eyebrow(buf, flow.take(1), "SHARING  ·  what streams and encodes cost the server");
         flow.gap(1);
         let text = match (&app.sharing, &app.sharing_error) {
@@ -515,7 +515,7 @@ fn overview(buf: &mut Buffer, hits: &mut Hits, app: &mut App, area: Rect) -> u16
                 t
             }
             (None, Some(error)) => format!("[{}]{}[/]", c(BAD), escape(error)),
-            (None, None) => "Reading Marquee…".into(),
+            (None, None) => "Reading Lilin…".into(),
         };
         let h = markup_block(buf, Rect::new(flow.x, flow.y, flow.width, 60), &text, Style::new().fg(SOFT));
         flow.gap(h + 1);

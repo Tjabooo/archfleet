@@ -79,7 +79,7 @@ the same file on every machine:
 | `mac` | Optional: the wired MAC address, which enables Wake-on-LAN |
 | `helper`, `clipboard_client` | Optional: where archfleet is on that Linux machine (default `~/.local/share/archfleet/archfleet`) / the Windows clipboard client |
 | `screentime_command` | Optional: how to run `screentime today --json` there (default: from `~/.local/bin` or `PATH`) |
-| `marquee` | Optional: `true` on the machine running [Marquee](https://github.com/Tjabooo/marquee), to show its sharing load |
+| `lilin` | Optional: `true` on the machine running [Lilin](https://github.com/Tjabooo/lilin), to show its sharing load |
 | `vpn` | Optional, see below |
 
 The VPN tab finds the Mullvad app on Linux machines by itself. `vpn` adds what it can't guess:

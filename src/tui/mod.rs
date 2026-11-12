@@ -336,7 +336,7 @@ impl App {
             return;
         }
         self.last_status = Some(Instant::now());
-        self.status_pending = self.nodes.len() + self.nodes.iter().any(|n| n.marquee) as usize;
+        self.status_pending = self.nodes.len() + self.nodes.iter().any(|n| n.lilin) as usize;
         for node in self.nodes.clone() {
             self.spawn(move || {
                 let result = backend::status(&node);
@@ -353,9 +353,9 @@ impl App {
                 })
             });
         }
-        if self.nodes.iter().any(|n| n.marquee) {
+        if self.nodes.iter().any(|n| n.lilin) {
             self.spawn(|| {
-                let result = backend::marquee_load();
+                let result = backend::lilin_load();
                 apply(move |app| {
                     app.status_pending = app.status_pending.saturating_sub(1);
                     match result {

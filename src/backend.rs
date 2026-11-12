@@ -1,5 +1,5 @@
 //! Talking to the machines: the helper over SSH (or in-process for this machine), PowerShell on
-//! Windows, SCP, Wake-on-LAN, the link test, Marquee's load report and the Arch news feed.
+//! Windows, SCP, Wake-on-LAN, the link test, Lilin's load report and the Arch news feed.
 use crate::config::Node;
 use crate::util::{self, Res, args, jb, js, secs};
 use serde_json::{Value, json};
@@ -379,16 +379,16 @@ fn http_get(url: &str, headers: &[(&str, &str)], timeout: f64) -> Res<(u16, Stri
     Ok((status, body))
 }
 
-/// What streams and encodes cost the server right now: Marquee's House → Sharing report.
-pub fn marquee_load() -> Res<Value> {
+/// What streams and encodes cost the server right now: Lilin's House → Sharing report.
+pub fn lilin_load() -> Res<Value> {
     let (url, token) =
-        crate::config::marquee_config().ok_or("Marquee isn’t set up on this machine (no ~/.config/marquee-house.env: run marquee-house setup).")?;
+        crate::config::lilin_config().ok_or("Lilin isn’t set up on this machine (no ~/.config/lilin-house.env: run lilin-house setup).")?;
     let (status, body) =
-        http_get(&format!("{url}/api/house/load"), &[("X-Marquee-Token", &token)], 6.0).map_err(|_| format!("Marquee isn’t answering at {url}."))?;
+        http_get(&format!("{url}/api/house/load"), &[("X-Lilin-Token", &token)], 6.0).map_err(|_| format!("Lilin isn’t answering at {url}."))?;
     match status {
         200..=299 => serde_json::from_str(&body).map_err(|e| e.to_string()),
-        403 => Err("Marquee refused the House token (only accepted straight from the home network).".into()),
-        code => Err(format!("Marquee answered {code}.")),
+        403 => Err("Lilin refused the House token (only accepted straight from the home network).".into()),
+        code => Err(format!("Lilin answered {code}.")),
     }
 }
 

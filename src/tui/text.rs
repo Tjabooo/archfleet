@@ -1,5 +1,5 @@
 //! Styled text for the dashboard: a tiny markup ([b], [#rrggbb], [/]) and the formatted sections
-//! (Marquee's sharing report, Screen Time, the VPN detail, the NPU line).
+//! (Lilin's sharing report, Screen Time, the VPN detail, the NPU line).
 use crate::util::{self, ja, jb, jf, js, jtext};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span, Text};
@@ -115,7 +115,7 @@ pub fn c(color: Color) -> String {
     }
 }
 
-// ---------- Marquee: what streams and encodes cost the server ----------
+// ---------- Lilin: what streams and encodes cost the server ----------
 
 fn load_bar(value: Option<f64>, maximum: Option<f64>, width: usize) -> String {
     let Some(maximum) = maximum.filter(|m| *m > 0.0) else { return " ".repeat(width) };
@@ -147,7 +147,7 @@ pub fn sharing_text(load: &Value) -> String {
     let now_ms = util::now_secs() * 1000.0;
     let (muted, bad, good) = (c(MUTED), c(BAD), c(ACCENT));
     let limits = load.get("limits").cloned().unwrap_or(Value::Null);
-    let mut lines = vec![format!("[{muted}]Marquee on the server  ·  checked {}[/]", util::clock(jf(load, "at").unwrap_or(0.0)))];
+    let mut lines = vec![format!("[{muted}]Lilin on the server  ·  checked {}[/]", util::clock(jf(load, "at").unwrap_or(0.0)))];
     for w in ja(load, "warnings") {
         lines.push(format!("[{bad}]⚠ {}[/]", escape(&jtext(w))));
     }
@@ -177,7 +177,7 @@ pub fn sharing_text(load: &Value) -> String {
         );
     }
     if let Some(cpu) = jf(load, "cpu") {
-        let own = load.get("marqueeCpu").filter(|v| !v.is_null()).map(|v| format!("  [{muted}]Marquee {}%[/]", jtext(v))).unwrap_or_default();
+        let own = load.get("lilinCpu").filter(|v| !v.is_null()).map(|v| format!("  [{muted}]Lilin {}%[/]", jtext(v))).unwrap_or_default();
         row(&mut lines, "CPU", load_bar(Some(cpu), Some(100.0), 14), format!("{}%{own}", jtext(&load["cpu"])));
     }
     if let Some(gpu) = load.get("gpu").filter(|g| util::truthy(g)) {

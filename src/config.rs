@@ -16,7 +16,7 @@ pub struct Node {
     pub helper: Option<String>,
     pub clipboard_client: Option<String>,
     pub screentime_command: Option<String>,
-    pub marquee: bool,
+    pub lilin: bool,
     pub vpn: Map<String, Value>,
 }
 
@@ -63,7 +63,7 @@ pub fn parse_nodes(json: &str) -> Res<Vec<Node>> {
             helper: text(obj, "helper"),
             clipboard_client: text(obj, "clipboard_client"),
             screentime_command: text(obj, "screentime_command"),
-            marquee: obj.get("marquee").is_some_and(util::truthy),
+            lilin: obj.get("lilin").is_some_and(util::truthy),
             vpn: obj.get("vpn").and_then(Value::as_object).cloned().unwrap_or_default(),
             alias,
         });
@@ -117,14 +117,14 @@ fn env_get<'a>(env: &'a [(String, String)], key: &str) -> Option<&'a str> {
     env.iter().rev().find(|(k, _)| k == key).map(|(_, v)| v.as_str()).filter(|v| !v.is_empty())
 }
 
-/// Marquee's address and House token: marquee-house's config on the Linux machines, Marquee's own
+/// Lilin's address and House token: lilin-house's config on the Linux machines, Lilin's own
 /// .env when Archfleet runs on the server. None when neither is there.
-pub fn marquee_config() -> Option<(String, String)> {
-    let env = read_env(&util::home().join(".config").join("marquee-house.env"));
-    if let (Some(url), Some(token)) = (env_get(&env, "MARQUEE_URL"), env_get(&env, "HOUSE_TOKEN")) {
+pub fn lilin_config() -> Option<(String, String)> {
+    let env = read_env(&util::home().join(".config").join("lilin-house.env"));
+    if let (Some(url), Some(token)) = (env_get(&env, "LILIN_URL"), env_get(&env, "HOUSE_TOKEN")) {
         return Some((url.trim_end_matches('/').to_string(), token.to_string()));
     }
-    let server = std::env::var("MARQUEE_ENV").unwrap_or_else(|_| r"C:\marquee\.env".into());
+    let server = std::env::var("LILIN_ENV").unwrap_or_else(|_| r"C:\lilin\.env".into());
     let env = read_env(Path::new(&server));
     let token = env_get(&env, "HOUSE_TOKEN")?;
     Some((format!("http://127.0.0.1:{}", env_get(&env, "PORT").unwrap_or("8080")), token.to_string()))
@@ -138,14 +138,14 @@ mod tests {
     fn defaults_and_lan() {
         let nodes = parse_nodes(
             r#"[{"alias":"a","address":"10.0.0.2","mac":"00:11:22:33:44:55"},
-                {"alias":"b","hostname":"bee","label":"Bee","os":"windows","address":"10.0.0.3","marquee":true,
+                {"alias":"b","hostname":"bee","label":"Bee","os":"windows","address":"10.0.0.3","lilin":true,
                  "vpn":{"restart":"x"}}]"#,
         )
         .unwrap();
         assert_eq!(nodes[0].hostname, "a");
         assert_eq!(nodes[0].label, "a");
         assert!(nodes[0].linux());
-        assert!(!nodes[1].linux() && nodes[1].marquee);
+        assert!(!nodes[1].linux() && nodes[1].lilin);
         assert_eq!(nodes[1].vpn_str("restart"), Some("x"));
         assert_eq!(lan_label(&nodes), "10.0.0.0/24");
     }
